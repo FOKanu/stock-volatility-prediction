@@ -25,8 +25,10 @@ Stock Market Dataset/
 
 | Notebook | Purpose |
 |----------|---------|
-| `notebooks/01_exploratory_data_analysis.ipynb` | EDA |
-| `notebooks/02_preprocessing.ipynb` | Preprocessing pipeline → `data/processed/` |
+| `Analytics notebooks/01_exploratory_data_analysis.ipynb` | EDA |
+| `Analytics notebooks/02_preprocessing.ipynb` | Preprocessing pipeline → `data/processed/` |
+| `04_ML_Model_Iteration-1/03a_model_bidirectional_gru.ipynb` | Bidirectional GRU model |
+| `04_ML_Model_Iteration-1/03b_model_tcn.ipynb` | TCN model |
 
 ## Docs
 
