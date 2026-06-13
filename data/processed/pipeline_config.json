@@ -1,0 +1,29 @@
+{
+  "asset_type": "stock",
+  "symbols_v1": [
+    "AAPL"
+  ],
+  "min_trading_days": 756,
+  "max_zero_volume_pct": 0.2,
+  "financial_status_normal_only": true,
+  "feature_cols": [
+    "log_return",
+    "log_volume",
+    "intraday_range",
+    "volatility_21",
+    "return_ma_21",
+    "rsi_14",
+    "spy_log_return"
+  ],
+  "price_col": "Adj Close",
+  "target_type": "direction",
+  "target_horizon_days": 1,
+  "lookback_days": 60,
+  "warmup_days": 21,
+  "train_end": "2017-12-31",
+  "val_start": "2018-01-01",
+  "val_end": "2019-12-31",
+  "test_start": "2020-01-01",
+  "test_end": "2020-04-01",
+  "random_seed": 42
+}

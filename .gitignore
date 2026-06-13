@@ -1,0 +1,8 @@
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+.ipynb_checkpoints/
+
+# Local dataset (~2.6 GB) — obtain separately; see README
+Stock Market Dataset/
