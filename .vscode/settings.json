@@ -1,14 +1,6 @@
 {
   "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
   "python.terminal.activateEnvironment": true,
-  "jupyter.kernels.excludePythonEnvironments": [
-    "/Users/franciskanu/Documents/Education/Programing for Data Analytics/.venv/bin/python"
-  ],
   "notebook.defaultFormatter": "ms-python.python",
-  "jupyter.kernels.filter": [
-    {
-      "path": "${workspaceFolder}/.venv/bin/python",
-      "type": "pythonEnvironment"
-    }
-  ]
+  "jupyter.kernels.excludePythonEnvironments": []
 }

@@ -2,7 +2,28 @@
 
 BIT4.2C Programming for Data Analytics — Final Project (RNN-based stock direction prediction).
 
-## Setup
+## Setup (WSL — RTX 5090 workbench)
+
+Project root:
+
+```
+~/ai-workspace/experiments/stock-prediction
+```
+
+```bash
+cd ~/ai-workspace/experiments/stock-prediction
+bash scripts/setup-wsl-venv.sh   # first time only (TensorFlow GPU)
+source .venv/bin/activate
+```
+
+Or use the existing venv after migration:
+
+```bash
+source ~/ai-workspace/experiments/stock-prediction/.venv/bin/activate
+pip install -r requirements.txt
+```
+
+## Setup (legacy Windows path)
 
 ```bash
 python3 -m venv .venv
