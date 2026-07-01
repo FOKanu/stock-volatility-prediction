@@ -1,12 +1,19 @@
 #!/usr/bin/env bash
-# Write Jupyter kernel.json with TensorFlow GPU env for RTX 5090 (WSL).
+# Register the ONE Jupyter kernel for stock-prediction (TensorFlow GPU / WSL).
 set -euo pipefail
 
 PROJECT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VENV="${PROJECT}/.venv"
-KERNEL_NAME="stock-prediction-wsl"
-KERNEL_DIR="${HOME}/.local/share/jupyter/kernels/${KERNEL_NAME}"
+KERNEL_NAME="stock-prediction"
+DISPLAY_NAME="Python (stock-prediction)"
+KERNEL_DIR="${VENV}/share/jupyter/kernels/${KERNEL_NAME}"
+USER_KERNEL_DIR="${HOME}/.local/share/jupyter/kernels/${KERNEL_NAME}"
 SP="${VENV}/lib/python3.12/site-packages/nvidia"
+
+if [[ ! -x "${VENV}/bin/python" ]]; then
+  echo "Missing ${VENV}/bin/python — run scripts/setup-wsl-venv.sh first." >&2
+  exit 1
+fi
 
 LD_PATHS=(
   "${SP}/cudnn/lib"
@@ -22,8 +29,10 @@ LD_PATHS=(
 )
 LD_LIBRARY_PATH="$(IFS=:; echo "${LD_PATHS[*]}"):"
 
-mkdir -p "$KERNEL_DIR"
-cat > "${KERNEL_DIR}/kernel.json" <<EOF
+write_kernel() {
+  local target_dir="$1"
+  mkdir -p "$target_dir"
+  cat > "${target_dir}/kernel.json" <<EOF
 {
   "argv": [
     "${VENV}/bin/python",
@@ -33,7 +42,7 @@ cat > "${KERNEL_DIR}/kernel.json" <<EOF
     "-f",
     "{connection_file}"
   ],
-  "display_name": "Python (${KERNEL_NAME})",
+  "display_name": "${DISPLAY_NAME}",
   "language": "python",
   "metadata": {
     "debugger": true,
@@ -43,8 +52,28 @@ cat > "${KERNEL_DIR}/kernel.json" <<EOF
   "env": {
     "LD_LIBRARY_PATH": "${LD_LIBRARY_PATH}",
     "XLA_FLAGS": "--xla_gpu_cuda_data_dir=${SP}/cuda_nvcc",
-    "TF_FORCE_GPU_ALLOW_GROWTH": "true"
+    "TF_FORCE_GPU_ALLOW_GROWTH": "true",
+    "PIP_USER": ""
   }
 }
 EOF
-echo "Wrote ${KERNEL_DIR}/kernel.json"
+  echo "Wrote ${target_dir}/kernel.json"
+}
+
+write_kernel "$KERNEL_DIR"
+write_kernel "$USER_KERNEL_DIR"
+
+# Remove duplicate / legacy kernels for this project (project venv).
+LEGACY_PROJECT_KERNELS=(python3 stock-prediction-wsl)
+for legacy in "${LEGACY_PROJECT_KERNELS[@]}"; do
+  if [[ -d "${VENV}/share/jupyter/kernels/${legacy}" ]]; then
+    rm -rf "${VENV}/share/jupyter/kernels/${legacy}"
+    echo "Removed legacy project kernel: ${legacy}"
+  fi
+done
+
+echo ""
+echo "Registered kernel: ${DISPLAY_NAME} (${KERNEL_NAME})"
+echo "Python: ${VENV}/bin/python"
+echo ""
+echo "Next: python scripts/fix_notebook_kernels.py"

@@ -7,6 +7,13 @@
   ],
   "settings": {
     "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
-    "python.terminal.activateEnvironment": true
+    "python.terminal.activateEnvironment": true,
+    "jupyter.jupyterServerType": "local",
+    "jupyter.kernels.excludePythonEnvironments": [
+      "${env:HOME}/venvs/tf-gpu/bin/tf-gpu-python",
+      "${env:HOME}/ai-workspace/experiments/stock-tf/.venv/bin/python",
+      "${env:HOME}/ai-workspace/experiments/_template-ml/.venv/bin/python",
+      "${env:HOME}/ai-workspace/.venv/bin/python"
+    ]
   }
 }

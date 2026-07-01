@@ -1,0 +1,68 @@
+{
+  "job_id": "02",
+  "job_slug": "vol_regime",
+  "dataset_tag": "dev200",
+  "status": "active",
+  "target_type": "vol_regime_21",
+  "primary_metric": "macro_f1",
+  "baseline": {
+    "stocks": {
+      "notebook": "J02_vol_regime/stocks/00a_baseline_vol_regime_stocks.ipynb",
+      "predictions_json": null,
+      "val_macro_f1": null,
+      "crisis_macro_f1": null,
+      "trained_at": null
+    },
+    "etfs": {
+      "notebook": "J02_vol_regime/etfs/00a_baseline_vol_regime_etfs.ipynb",
+      "predictions_json": null,
+      "val_macro_f1": null,
+      "crisis_macro_f1": null,
+      "trained_at": null
+    },
+    "market": {
+      "notebook": "J02_vol_regime/market/00a_baseline_vol_regime_market.ipynb",
+      "predictions_json": null,
+      "val_macro_f1": null,
+      "crisis_macro_f1": null,
+      "trained_at": null
+    }
+  },
+  "champions": {
+    "stocks": {
+      "architecture": null,
+      "notebook": null,
+      "predictions_json": null,
+      "val_macro_f1": null,
+      "crisis_macro_f1": null,
+      "beats_baseline_val": null,
+      "beats_baseline_crisis": null,
+      "selected_at": null
+    },
+    "etfs": {
+      "architecture": null,
+      "notebook": null,
+      "predictions_json": null,
+      "val_macro_f1": null,
+      "crisis_macro_f1": null,
+      "beats_baseline_val": null,
+      "beats_baseline_crisis": null,
+      "selected_at": null
+    },
+    "market": {
+      "architecture": null,
+      "notebook": null,
+      "predictions_json": null,
+      "val_macro_f1": null,
+      "crisis_macro_f1": null,
+      "beats_baseline_val": null,
+      "beats_baseline_crisis": null,
+      "selected_at": null
+    }
+  },
+  "selection_rubric": [
+    "beats_baseline_val_macro_f1",
+    "val_macro_f1",
+    "crisis_macro_f1"
+  ]
+}
