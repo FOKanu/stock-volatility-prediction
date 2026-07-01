@@ -1,0 +1,53 @@
+{
+  "profile": "plus5",
+  "asset_type": "etf",
+  "symbols_v1": [
+    "AAPL"
+  ],
+  "min_trading_days": 756,
+  "max_zero_volume_pct": 0.2,
+  "financial_status_normal_only": true,
+  "price_col": "Adj Close",
+  "target_type": "abs_return",
+  "target_horizon_days": 1,
+  "feature_cols": [
+    "log_return",
+    "abs_return",
+    "squared_return",
+    "intraday_range",
+    "range_ratio",
+    "volatility_5",
+    "volatility_21",
+    "log_volume",
+    "volume_surge",
+    "spy_volatility_21",
+    "return_ma_21",
+    "rsi_14",
+    "volatility_ratio_5_21",
+    "lag_abs_return_1",
+    "spy_log_return"
+  ],
+  "lookback_days": 60,
+  "warmup_days": 21,
+  "train_end": "2017-12-31",
+  "val_start": "2018-01-01",
+  "val_end": "2019-12-31",
+  "test_start": "2020-01-01",
+  "test_end": "2020-04-01",
+  "random_seed": 42,
+  "symbol_scope": "all",
+  "history_outlier_filter": "none",
+  "n_symbols": 8,
+  "symbols": [
+    "AAXJ",
+    "ACWI",
+    "ACWX",
+    "ADRE",
+    "AGND",
+    "AGZD",
+    "AIA",
+    "AIRR"
+  ],
+  "train_target_mean": 0.009716572151833188,
+  "train_target_median": 0.006031612934742355
+}
