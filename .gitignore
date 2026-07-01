@@ -4,5 +4,46 @@ __pycache__/
 .DS_Store
 .ipynb_checkpoints/
 
-# Local dataset (~2.6 GB) — obtain separately; see README
+# Raw OHLCV dataset (~2.6 GB) — obtain separately; see docs/DATASET.md
+Stock Market Dataset
 Stock Market Dataset/
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Regenerable tabular frames that exceed GitHub's 100 MB file limit.
+# Rebuild with: python scripts/run_preprocessing.py ...
+data/processed/stocks_universe_vol_regime_21_model_frame_plus5.csv
+data/processed/etfs_universe_vol_regime_21_model_frame_plus5.csv
+data/processed/etfs_universe_model_frame_plus5.csv
+
+# Scaffold / untrained notebooks — regenerate locally:
+#   python scripts/scaffold_ml_iteration2_notebooks.py --job-slug <slug>
+ML_Iteration_2/J03_rel_strength/
+ML_Iteration_2/J04_etf_opportunity/
+ML_Iteration_2/00_orchestration/
+ML_Iteration_2/09a_gru_15_fts_all_stock.ipynb
+ML_Iteration_2/J02_vol_regime/etfs/
+ML_Iteration_2/J02_vol_regime/market/02d_cnn1d_vol_regime_market.ipynb
+ML_Iteration_2/J02_vol_regime/market/02e_xgb_vol_regime_market.ipynb
+ML_Iteration_2/J02_vol_regime/stocks/02b_tcn_vol_regime_stocks.ipynb
+
+# Processed artifacts for untrained J02 etfs lane (rebuild when ready)
+data/processed/etfs_universe_dev200_vol_regime_21_sequences_plus5.npz
+data/processed/pipeline_config_etfs_universe_dev200_vol_regime_21_plus5.json
+data/processed/scaler_etfs_universe_dev200_vol_regime_21_plus5.json
+
+# Legacy iteration-1 checkpoints (superseded by ML_Iteration_2)
+data/models/bigru_*
+data/models/tcn_best.keras
+data/models/tcn_final.keras
+data/models/tcn_predictions.json
+data/models/tcn_v2_eval_latest.json
+data/models/v2_eval_comparison.json
+data/models/vol_gru_stocks_universe_plus5_*
+
+# Scratch
+untitled.chat
+*.chat
