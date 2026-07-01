@@ -14,7 +14,7 @@ Command sequences to run Jupyter on your RTX 5090 workbench and open it in your 
 | Remote workspace | `/home/friyekekanu/ai-workspace` |
 | **Project (WSL)** | `~/ai-workspace/experiments/stock-prediction` |
 | **TensorFlow GPU venv** | `~/ai-workspace/experiments/stock-prediction/.venv` |
-| **Jupyter kernel** | `Python (stock-prediction-wsl)` |
+| **Jupyter kernel** | `Python (stock-prediction)` — see project [README.md](README.md) |
 
 Port `8888` is forwarded in `~/.ssh/config` via `LocalForward 8888 127.0.0.1:8888`.
 
@@ -165,7 +165,7 @@ ssh rtx5090 'source ~/ai-workspace/experiments/stock-prediction/.venv/bin/activa
 | Problem | Action |
 |---------|--------|
 | `GPU available: False` | Kernel → **Python (stock-prediction-wsl)** → Restart Kernel |
-| `DNN library initialization failed` | Wrong cuDNN (9.1 from PyTorch venv). Use `stock-prediction-wsl` kernel, not `model-testing` |
+| `DNN library initialization failed` | Wrong cuDNN path. Re-run `bash scripts/install-jupyter-kernel.sh` and select **`Python (stock-prediction)`** |
 | `Autotuner could not compile` / libdevice error | Ensure `nvidia-cuda-nvcc-cu12` installed; kernel has `XLA_FLAGS` set |
 | `Connection refused` | Tailscale up; tunnel running: `connect-workbench.sh` |
 | Port 8888 in use on Mac | `pkill -f "ssh -N rtx5090"` then restart tunnel |
