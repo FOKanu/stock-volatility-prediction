@@ -1,0 +1,52 @@
+{
+  "job_id": "01",
+  "job_slug": "vol_risk",
+  "dataset_tag": "dev200",
+  "status": "complete",
+  "baseline": {
+    "stocks": {
+      "notebook": "J01_vol_risk/stocks/00a_baseline_vol_risk_stocks.ipynb",
+      "predictions_json": "baseline_vol_risk_stocks_dev200_tf_predictions.json",
+      "val_mae": 0.015471088699996471,
+      "crisis_mae": 0.02695477567613125,
+      "trained_at": "2026-06-30T01:05:00+00:00"
+    },
+    "etfs": {
+      "notebook": "J01_vol_risk/etfs/00a_baseline_vol_risk_etfs.ipynb",
+      "predictions_json": "baseline_vol_risk_etfs_dev200_tf_predictions.json",
+      "val_mae": 0.005475262645632029,
+      "crisis_mae": 0.01437580119818449,
+      "trained_at": "2026-06-30T03:14:00+00:00"
+    }
+  },
+  "champions": {
+    "stocks": {
+      "architecture": "xgb",
+      "notebook": "J01_vol_risk/stocks/01e_xgb_vol_risk_stocks.ipynb",
+      "predictions_json": "xgb_vol_risk_stocks_dev200_tf_predictions.json",
+      "val_mae": 0.014261143282055855,
+      "crisis_mae": 0.028041329234838486,
+      "beats_baseline_val": true,
+      "beats_baseline_crisis": false,
+      "selected_at": "2026-07-01T00:00:00+00:00",
+      "notes": "Best val MAE; crisis slightly worse than baseline. CNN1D ties baseline on crisis if needed."
+    },
+    "etfs": {
+      "architecture": "xgb",
+      "notebook": "J01_vol_risk/etfs/01e_xgb_vol_risk_etfs.ipynb",
+      "predictions_json": "xgb_vol_risk_etfs_dev200_tf_predictions.json",
+      "val_mae": 0.004253628198057413,
+      "crisis_mae": 0.013500303961336613,
+      "beats_baseline_val": true,
+      "beats_baseline_crisis": true,
+      "selected_at": "2026-07-01T00:00:00+00:00",
+      "notes": "Best val MAE and beats baseline on crisis."
+    }
+  },
+  "selection_rubric": [
+    "beats_baseline_val_mae",
+    "val_mae",
+    "crisis_mae",
+    "top10_vol_auc"
+  ]
+}

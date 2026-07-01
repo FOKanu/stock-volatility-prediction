@@ -1,7 +1,18 @@
-pandas
+# TensorFlow GPU stack (WSL / RTX 5090). Install inside project .venv only:
+#   source .venv/bin/activate && pip install -r requirements.txt
+tensorflow[and-cuda]==2.21.0
+nvidia-cudnn-cu12>=9.3.0
+nvidia-cuda-nvcc-cu12>=12.5.0
+
+# Data / ML
 numpy
+pandas
 matplotlib
 seaborn
 scipy
+scikit-learn
+xgboost>=2.0.0
+
+# Notebooks
 jupyterlab
 ipykernel
