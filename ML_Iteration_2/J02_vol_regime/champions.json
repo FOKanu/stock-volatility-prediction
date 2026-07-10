@@ -2,62 +2,65 @@
   "job_id": "02",
   "job_slug": "vol_regime",
   "dataset_tag": "dev200",
-  "status": "active",
+  "status": "complete",
   "target_type": "vol_regime_21",
   "primary_metric": "macro_f1",
   "baseline": {
     "stocks": {
       "notebook": "J02_vol_regime/stocks/00a_baseline_vol_regime_stocks.ipynb",
-      "predictions_json": null,
-      "val_macro_f1": null,
-      "crisis_macro_f1": null,
-      "trained_at": null
+      "predictions_json": "baseline_vol_regime_stocks_dev200_tf_predictions.json",
+      "val_macro_f1": 0.7587117395686018,
+      "crisis_macro_f1": 0.6396085102535602,
+      "trained_at": "2026-07-01T18:21:13+00:00"
     },
     "etfs": {
       "notebook": "J02_vol_regime/etfs/00a_baseline_vol_regime_etfs.ipynb",
-      "predictions_json": null,
-      "val_macro_f1": null,
-      "crisis_macro_f1": null,
-      "trained_at": null
+      "predictions_json": "baseline_vol_regime_etfs_dev200_tf_predictions.json",
+      "val_macro_f1": 0.732437918882143,
+      "crisis_macro_f1": 0.5864380583323185,
+      "trained_at": "2026-07-10T12:00:28+00:00"
     },
     "market": {
       "notebook": "J02_vol_regime/market/00a_baseline_vol_regime_market.ipynb",
-      "predictions_json": null,
-      "val_macro_f1": null,
-      "crisis_macro_f1": null,
-      "trained_at": null
+      "predictions_json": "baseline_vol_regime_market_dev200_tf_predictions.json",
+      "val_macro_f1": 0.6597490778675448,
+      "crisis_macro_f1": 0.3091321610890527,
+      "trained_at": "2026-07-01T18:54:23+00:00"
     }
   },
   "champions": {
     "stocks": {
-      "architecture": null,
-      "notebook": null,
-      "predictions_json": null,
-      "val_macro_f1": null,
-      "crisis_macro_f1": null,
-      "beats_baseline_val": null,
-      "beats_baseline_crisis": null,
-      "selected_at": null
+      "architecture": "lstm",
+      "notebook": "J02_vol_regime/stocks/02c_lstm_vol_regime_stocks.ipynb",
+      "predictions_json": "lstm_vol_regime_stocks_dev200_tf_predictions.json",
+      "val_macro_f1": 0.8022364898635825,
+      "crisis_macro_f1": 0.6595956397548968,
+      "beats_baseline_val": true,
+      "beats_baseline_crisis": true,
+      "selected_at": "2026-07-10T12:15:00+00:00",
+      "notes": "Best val macro-F1 (+0.0435 vs baseline) AND best crisis macro-F1 (+0.0200). All five candidates beat baseline on val; only lstm, cnn1d, and xgb also beat it on crisis."
     },
     "etfs": {
-      "architecture": null,
-      "notebook": null,
-      "predictions_json": null,
-      "val_macro_f1": null,
-      "crisis_macro_f1": null,
-      "beats_baseline_val": null,
-      "beats_baseline_crisis": null,
-      "selected_at": null
+      "architecture": "gru",
+      "notebook": "J02_vol_regime/etfs/02a_gru_vol_regime_etfs.ipynb",
+      "predictions_json": "gru_vol_regime_etfs_dev200_tf_predictions.json",
+      "val_macro_f1": 0.7366545239247597,
+      "crisis_macro_f1": 0.5878394690348243,
+      "beats_baseline_val": true,
+      "beats_baseline_crisis": true,
+      "selected_at": "2026-07-10T12:15:00+00:00",
+      "notes": "Only candidate beating baseline on BOTH val (+0.0042) and crisis (+0.0014); margins are thin. lstm edges baseline on val (+0.0011) but collapses in crisis (-0.0754). Baseline is highly competitive on this lane."
     },
     "market": {
-      "architecture": null,
-      "notebook": null,
-      "predictions_json": null,
-      "val_macro_f1": null,
-      "crisis_macro_f1": null,
-      "beats_baseline_val": null,
-      "beats_baseline_crisis": null,
-      "selected_at": null
+      "architecture": "baseline",
+      "notebook": "J02_vol_regime/market/00a_baseline_vol_regime_market.ipynb",
+      "predictions_json": "baseline_vol_regime_market_dev200_tf_predictions.json",
+      "val_macro_f1": 0.6597490778675448,
+      "crisis_macro_f1": 0.3091321610890527,
+      "beats_baseline_val": false,
+      "beats_baseline_crisis": false,
+      "selected_at": "2026-07-10T12:15:00+00:00",
+      "notes": "No candidate beat the ridge baseline on val macro-F1 (best: gru 0.6425 vs 0.6597); baseline retained. SPY-only lane has n=503 val / n=42 crisis rows, so NN candidates overfit. lstm is the only model beating baseline on crisis (0.3538 vs 0.3091, val 0.6350) - candidate crisis-specialist if the product ever needs one. All models severely under-predict the high-vol class in the COVID window (true pos rate 0.857, predicted 0.12-0.21)."
     }
   },
   "selection_rubric": [
