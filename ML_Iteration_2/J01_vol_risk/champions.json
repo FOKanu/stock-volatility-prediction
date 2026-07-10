@@ -21,15 +21,15 @@
   },
   "champions": {
     "stocks": {
-      "architecture": "xgb",
-      "notebook": "J01_vol_risk/stocks/01e_xgb_vol_risk_stocks.ipynb",
-      "predictions_json": "xgb_vol_risk_stocks_dev200_tf_predictions.json",
-      "val_mae": 0.014261143282055855,
-      "crisis_mae": 0.028041329234838486,
+      "architecture": "garchgru",
+      "notebook": "J01_vol_risk/stocks/01f_garchgru_vol_risk_stocks.ipynb",
+      "predictions_json": "garchgru_vol_risk_stocks_dev200_tf_predictions.json",
+      "val_mae": 0.014569725841283798,
+      "crisis_mae": 0.026793772354722023,
       "beats_baseline_val": true,
-      "beats_baseline_crisis": false,
-      "selected_at": "2026-07-01T00:00:00+00:00",
-      "notes": "Best val MAE; crisis slightly worse than baseline. CNN1D ties baseline on crisis if needed."
+      "beats_baseline_crisis": true,
+      "selected_at": "2026-07-10T00:45:00+00:00",
+      "notes": "Only candidate beating baseline on BOTH val and crisis MAE; lowest crisis MAE overall (rubric priority 2). XGB retains best val MAE (0.014261) but loses to baseline in the COVID window (0.028041). Previous champion: xgb (selected 2026-07-01)."
     },
     "etfs": {
       "architecture": "xgb",
