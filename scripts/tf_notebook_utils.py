@@ -115,24 +115,64 @@ def persistence_mae(
     return float(np.abs(persist_pred - y).mean())
 
 
-def _compile_regressor(model: tf.keras.Model, lr: float) -> tf.keras.Model:
+@tf.keras.utils.register_keras_serializable(package="stock_prediction")
+def qlike_loss(y_true, y_pred):
+    """QLIKE loss on the variance scale for volatility targets.
+
+    y_true / y_pred are on the |log return| (vol) scale; both are squared into
+    variances. QLIKE is asymmetric: underpredicting volatility is penalized more
+    than overpredicting it, which suits risk-control products.
+    """
+    eps = 1e-6
+    y_true = tf.cast(y_true, tf.float32)
+    y_pred = tf.cast(y_pred, tf.float32)
+    var_true = tf.square(y_true) + eps
+    var_pred = tf.square(tf.nn.relu(y_pred)) + eps
+    ratio = var_true / var_pred
+    return ratio - tf.math.log(ratio) - 1.0
+
+
+def _resolve_regression_loss(loss: str):
+    losses = {
+        "huber": tf.keras.losses.Huber(delta=1.0),
+        "qlike": qlike_loss,
+        "mse": tf.keras.losses.MeanSquaredError(),
+    }
+    if loss not in losses:
+        raise ValueError(f"Unknown regression loss {loss!r}; expected one of {sorted(losses)}")
+    return losses[loss]
+
+
+def asymmetric_error_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, float]:
+    """Split MAE by error sign: underprediction (pred < true) is the risky side."""
+    err = np.asarray(y_pred, dtype=np.float64) - np.asarray(y_true, dtype=np.float64)
+    under = err < 0
+    over = ~under
+    return {
+        "under_mae": float(np.abs(err[under]).mean()) if under.any() else 0.0,
+        "over_mae": float(np.abs(err[over]).mean()) if over.any() else 0.0,
+        "under_rate": float(under.mean()),
+    }
+
+
+def _compile_regressor(model: tf.keras.Model, lr: float, loss: str = "huber") -> tf.keras.Model:
     optimizer = tf.keras.optimizers.Adam(learning_rate=lr)
     if tf.keras.mixed_precision.global_policy().name == "mixed_float16":
         optimizer = tf.keras.mixed_precision.LossScaleOptimizer(optimizer)
     model.compile(
         optimizer=optimizer,
-        loss=tf.keras.losses.Huber(delta=1.0),
+        loss=_resolve_regression_loss(loss),
         metrics=[tf.keras.metrics.MeanAbsoluteError(name="mae")],
     )
     return model
 
 
-def build_lstm_model(lookback: int, n_features: int, lr: float) -> tf.keras.Model:
+def build_lstm_model(lookback: int, n_features: int, lr: float, loss: str = "huber") -> tf.keras.Model:
     inputs = tf.keras.layers.Input(shape=(lookback, n_features), name="sequence")
     x = tf.keras.layers.LSTM(64, return_sequences=True, dropout=0.2)(inputs)
     x = tf.keras.layers.LSTM(64, dropout=0.2)(x)
     outputs = tf.keras.layers.Dense(1, dtype="float32", name="target")(x)
-    return _compile_regressor(tf.keras.Model(inputs, outputs), lr)
+    return _compile_regressor(tf.keras.Model(inputs, outputs), lr, loss)
 
 
 def _tcn_residual_block(x, filters: int, kernel_size: int, dilation_rate: int, dropout: float):
@@ -167,7 +207,7 @@ def _tcn_residual_block(x, filters: int, kernel_size: int, dilation_rate: int, d
     return tf.keras.layers.Add()([x, residual])
 
 
-def build_tcn_model(lookback: int, n_features: int, lr: float) -> tf.keras.Model:
+def build_tcn_model(lookback: int, n_features: int, lr: float, loss: str = "huber") -> tf.keras.Model:
     l2 = tf.keras.regularizers.l2(1e-4)
     inputs = tf.keras.layers.Input(shape=(lookback, n_features), name="sequence")
     x = tf.keras.layers.Conv1D(32, 1, padding="same", use_bias=False, kernel_regularizer=l2)(inputs)
@@ -177,10 +217,10 @@ def build_tcn_model(lookback: int, n_features: int, lr: float) -> tf.keras.Model
     x = tf.keras.layers.Dense(32, activation="relu", kernel_regularizer=l2)(x)
     x = tf.keras.layers.Dropout(0.2)(x)
     outputs = tf.keras.layers.Dense(1, dtype="float32", name="target")(x)
-    return _compile_regressor(tf.keras.Model(inputs, outputs), lr)
+    return _compile_regressor(tf.keras.Model(inputs, outputs), lr, loss)
 
 
-def build_cnn1d_model(lookback: int, n_features: int, lr: float) -> tf.keras.Model:
+def build_cnn1d_model(lookback: int, n_features: int, lr: float, loss: str = "huber") -> tf.keras.Model:
     inputs = tf.keras.layers.Input(shape=(lookback, n_features), name="sequence")
     x = tf.keras.layers.Conv1D(64, 3, padding="same", activation="relu")(inputs)
     x = tf.keras.layers.MaxPooling1D(2)(x)
@@ -188,28 +228,154 @@ def build_cnn1d_model(lookback: int, n_features: int, lr: float) -> tf.keras.Mod
     x = tf.keras.layers.GlobalAveragePooling1D()(x)
     x = tf.keras.layers.Dropout(0.3)(x)
     outputs = tf.keras.layers.Dense(1, dtype="float32", name="target")(x)
-    return _compile_regressor(tf.keras.Model(inputs, outputs), lr)
+    return _compile_regressor(tf.keras.Model(inputs, outputs), lr, loss)
 
 
-def build_gru_model(lookback: int, n_features: int, lr: float) -> tf.keras.Model:
+def build_gru_model(lookback: int, n_features: int, lr: float, loss: str = "huber") -> tf.keras.Model:
     """2-layer GRU regressor matching the PyTorch universe model."""
     inputs = tf.keras.layers.Input(shape=(lookback, n_features), name="sequence")
     x = tf.keras.layers.GRU(64, return_sequences=True, dropout=0.2)(inputs)
     x = tf.keras.layers.GRU(64, dropout=0.2)(x)
     outputs = tf.keras.layers.Dense(1, dtype="float32", name="target")(x)
-    return _compile_regressor(tf.keras.Model(inputs, outputs), lr)
+    return _compile_regressor(tf.keras.Model(inputs, outputs), lr, loss)
 
 
-def build_regressor(architecture: str, lookback: int, n_features: int, lr: float) -> tf.keras.Model:
+@tf.keras.utils.register_keras_serializable(package="stock_prediction")
+class GarchGruCell(tf.keras.layers.Layer):
+    """GARCH(1,1)-style recurrent cell with learnable, constrained parameters.
+
+    State h_t plays the role of conditional variance sigma_t^2:
+
+        h_t = omega + alpha * x_{t-1}^2 + beta * h_{t-1}
+
+    where x is the (standardized) return input. Constraints alpha, beta >= 0 and
+    alpha + beta < 1 (covariance stationarity) are enforced with a softplus
+    parameterization plus rescaling. A small GRU runs alongside the GARCH state so
+    the model can also learn non-linear structure from the remaining features
+    ("neural GARCH": the GRU can modulate the effective parameters per step).
+    """
+
+    def __init__(self, gru_units: int = 32, return_idx: int = 0, **kwargs):
+        super().__init__(**kwargs)
+        self.gru_units = gru_units
+        self.return_idx = return_idx
+        self.gru_cell = tf.keras.layers.GRUCell(gru_units)
+        # state: [garch_variance (1), gru_state (gru_units)]
+        self.state_size = [1, gru_units]
+        self.output_size = 1 + gru_units
+
+    def build(self, input_shape):
+        # Unconstrained GARCH parameters (softplus-transformed in call).
+        # Inits target omega~0.05, alpha~0.10, beta~0.85: unconditional variance
+        # omega/(1-alpha-beta) ~= 1, matching z-scored return inputs.
+        self.raw_omega = self.add_weight(
+            name="raw_omega", shape=(1,), initializer=tf.keras.initializers.Constant(-2.97)
+        )
+        self.raw_alpha = self.add_weight(
+            name="raw_alpha", shape=(1,), initializer=tf.keras.initializers.Constant(-2.25)
+        )
+        self.raw_beta = self.add_weight(
+            name="raw_beta", shape=(1,), initializer=tf.keras.initializers.Constant(0.29)
+        )
+        # Dynamic (neural-GARCH) modulation of alpha/beta from the GRU state.
+        self.mod_dense = tf.keras.layers.Dense(
+            2, activation="tanh", kernel_initializer="zeros", name="param_modulation"
+        )
+        self.gru_cell.build(input_shape)
+        self.mod_dense.build((None, self.gru_units))
+        super().build(input_shape)
+
+    def garch_params(self):
+        omega = tf.nn.softplus(self.raw_omega)
+        alpha = tf.nn.softplus(self.raw_alpha)
+        beta = tf.nn.softplus(self.raw_beta)
+        # Rescale so alpha + beta < 1 (stationarity).
+        total = alpha + beta
+        scale = tf.where(total >= 0.999, 0.999 / total, tf.ones_like(total))
+        return omega, alpha * scale, beta * scale
+
+    def call(self, inputs, states):
+        h_garch, h_gru = states
+        inputs = tf.cast(inputs, h_gru.dtype)
+        h_garch = tf.cast(h_garch, h_gru.dtype)
+
+        gru_out, [h_gru_new] = self.gru_cell(inputs, [h_gru])
+
+        omega, alpha, beta = self.garch_params()
+        omega = tf.cast(omega, h_gru.dtype)
+        alpha = tf.cast(alpha, h_gru.dtype)
+        beta = tf.cast(beta, h_gru.dtype)
+
+        # +-10% dynamic modulation of alpha/beta from sequence context.
+        mod = self.mod_dense(gru_out) * 0.1
+        alpha_t = alpha * (1.0 + mod[:, 0:1])
+        beta_t = beta * (1.0 + mod[:, 1:2])
+
+        x_ret = inputs[:, self.return_idx : self.return_idx + 1]
+        h_garch_new = omega + alpha_t * tf.square(x_ret) + beta_t * h_garch
+
+        garch_vol = tf.sqrt(h_garch_new + 1e-8)
+        output = tf.concat([garch_vol, gru_out], axis=-1)
+        return output, [h_garch_new, h_gru_new]
+
+    def get_config(self):
+        config = super().get_config()
+        config.update({"gru_units": self.gru_units, "return_idx": self.return_idx})
+        return config
+
+
+def build_garchgru_model(
+    lookback: int,
+    n_features: int,
+    lr: float,
+    loss: str = "huber",
+    return_idx: int = 0,
+) -> tf.keras.Model:
+    """GARCH-GRU hybrid: embedded GARCH(1,1) variance recursion + GRU features.
+
+    return_idx must point at the log_return column of the feature tensor.
+    """
+    inputs = tf.keras.layers.Input(shape=(lookback, n_features), name="sequence")
+    cell = GarchGruCell(gru_units=32, return_idx=return_idx)
+    x = tf.keras.layers.RNN(cell, return_sequences=False, name="garch_gru")(inputs)
+    # Cell output = [garch_vol (1), gru_state (units)]; vol is refined by the GRU pathway.
+    garch_vol = tf.keras.layers.Lambda(lambda t: t[:, :1], name="garch_vol")(x)
+    gru_state = tf.keras.layers.Lambda(lambda t: t[:, 1:], name="gru_state")(x)
+    # GARCH state evolves on the z-scored input scale; targets (raw |log return|)
+    # live near 0.02, so calibrate with a learnable affine map initialized small.
+    garch_vol = tf.keras.layers.Dense(
+        1,
+        kernel_initializer=tf.keras.initializers.Constant(0.02),
+        bias_initializer="zeros",
+        name="vol_calibration",
+    )(garch_vol)
+    residual = tf.keras.layers.Dense(16, activation="relu")(gru_state)
+    residual = tf.keras.layers.Dense(1, kernel_initializer="zeros", name="neural_residual")(
+        residual
+    )
+    outputs = tf.keras.layers.Add(name="target_pre")([garch_vol, residual])
+    outputs = tf.keras.layers.Activation("linear", dtype="float32", name="target")(outputs)
+    return _compile_regressor(tf.keras.Model(inputs, outputs), lr, loss)
+
+
+def build_regressor(
+    architecture: str,
+    lookback: int,
+    n_features: int,
+    lr: float,
+    loss: str = "huber",
+    **arch_kwargs,
+) -> tf.keras.Model:
     builders = {
         "gru": build_gru_model,
         "tcn": build_tcn_model,
         "lstm": build_lstm_model,
         "cnn1d": build_cnn1d_model,
+        "garchgru": build_garchgru_model,
     }
     if architecture not in builders:
         raise ValueError(f"Unknown architecture {architecture!r}; expected one of {sorted(builders)}")
-    return builders[architecture](lookback, n_features, lr)
+    return builders[architecture](lookback, n_features, lr, loss=loss, **arch_kwargs)
 
 
 def flatten_sequences(X: np.ndarray) -> np.ndarray:
@@ -313,42 +479,53 @@ def _subsample_xy(
     return X[idx], y[idx]
 
 
-def _compile_classifier(model: tf.keras.Model, lr: float) -> tf.keras.Model:
+def _compile_classifier(model: tf.keras.Model, lr: float, n_classes: int = 2) -> tf.keras.Model:
     optimizer = tf.keras.optimizers.Adam(learning_rate=lr)
     if tf.keras.mixed_precision.global_policy().name == "mixed_float16":
         optimizer = tf.keras.mixed_precision.LossScaleOptimizer(optimizer)
-    model.compile(
-        optimizer=optimizer,
-        loss=tf.keras.losses.BinaryCrossentropy(),
-        metrics=[
-            tf.keras.metrics.BinaryAccuracy(name="accuracy"),
-            tf.keras.metrics.AUC(name="auc"),
-        ],
-    )
+    if n_classes > 2:
+        model.compile(
+            optimizer=optimizer,
+            loss=tf.keras.losses.SparseCategoricalCrossentropy(),
+            metrics=[tf.keras.metrics.SparseCategoricalAccuracy(name="accuracy")],
+        )
+    else:
+        model.compile(
+            optimizer=optimizer,
+            loss=tf.keras.losses.BinaryCrossentropy(),
+            metrics=[
+                tf.keras.metrics.BinaryAccuracy(name="accuracy"),
+                tf.keras.metrics.AUC(name="auc"),
+            ],
+        )
     return model
 
 
-def _dense_classifier_head(x: tf.Tensor) -> tf.Tensor:
+def _dense_classifier_head(x: tf.Tensor, n_classes: int = 2) -> tf.Tensor:
+    if n_classes > 2:
+        return tf.keras.layers.Dense(
+            n_classes, activation="softmax", dtype="float32", name="target"
+        )(x)
     return tf.keras.layers.Dense(1, activation="sigmoid", dtype="float32", name="target")(x)
 
 
-def build_lstm_classifier(lookback: int, n_features: int, lr: float) -> tf.keras.Model:
+def build_lstm_classifier(lookback: int, n_features: int, lr: float, n_classes: int = 2) -> tf.keras.Model:
     inputs = tf.keras.layers.Input(shape=(lookback, n_features), name="sequence")
     x = tf.keras.layers.LSTM(64, return_sequences=True, dropout=0.2)(inputs)
     x = tf.keras.layers.LSTM(64, dropout=0.2)(x)
-    outputs = _dense_classifier_head(x)
-    return _compile_classifier(tf.keras.Model(inputs, outputs), lr)
+    outputs = _dense_classifier_head(x, n_classes)
+    return _compile_classifier(tf.keras.Model(inputs, outputs), lr, n_classes)
 
 
-def build_gru_classifier(lookback: int, n_features: int, lr: float) -> tf.keras.Model:
+def build_gru_classifier(lookback: int, n_features: int, lr: float, n_classes: int = 2) -> tf.keras.Model:
     inputs = tf.keras.layers.Input(shape=(lookback, n_features), name="sequence")
     x = tf.keras.layers.GRU(64, return_sequences=True, dropout=0.2)(inputs)
     x = tf.keras.layers.GRU(64, dropout=0.2)(x)
-    outputs = _dense_classifier_head(x)
-    return _compile_classifier(tf.keras.Model(inputs, outputs), lr)
+    outputs = _dense_classifier_head(x, n_classes)
+    return _compile_classifier(tf.keras.Model(inputs, outputs), lr, n_classes)
 
 
-def build_tcn_classifier(lookback: int, n_features: int, lr: float) -> tf.keras.Model:
+def build_tcn_classifier(lookback: int, n_features: int, lr: float, n_classes: int = 2) -> tf.keras.Model:
     l2 = tf.keras.regularizers.l2(1e-4)
     inputs = tf.keras.layers.Input(shape=(lookback, n_features), name="sequence")
     x = tf.keras.layers.Conv1D(32, 1, padding="same", use_bias=False, kernel_regularizer=l2)(inputs)
@@ -357,22 +534,24 @@ def build_tcn_classifier(lookback: int, n_features: int, lr: float) -> tf.keras.
     x = tf.keras.layers.GlobalAveragePooling1D()(x)
     x = tf.keras.layers.Dense(32, activation="relu", kernel_regularizer=l2)(x)
     x = tf.keras.layers.Dropout(0.2)(x)
-    outputs = _dense_classifier_head(x)
-    return _compile_classifier(tf.keras.Model(inputs, outputs), lr)
+    outputs = _dense_classifier_head(x, n_classes)
+    return _compile_classifier(tf.keras.Model(inputs, outputs), lr, n_classes)
 
 
-def build_cnn1d_classifier(lookback: int, n_features: int, lr: float) -> tf.keras.Model:
+def build_cnn1d_classifier(lookback: int, n_features: int, lr: float, n_classes: int = 2) -> tf.keras.Model:
     inputs = tf.keras.layers.Input(shape=(lookback, n_features), name="sequence")
     x = tf.keras.layers.Conv1D(64, 3, padding="same", activation="relu")(inputs)
     x = tf.keras.layers.MaxPooling1D(2)(x)
     x = tf.keras.layers.Conv1D(64, 3, padding="same", activation="relu")(x)
     x = tf.keras.layers.GlobalAveragePooling1D()(x)
     x = tf.keras.layers.Dropout(0.3)(x)
-    outputs = _dense_classifier_head(x)
-    return _compile_classifier(tf.keras.Model(inputs, outputs), lr)
+    outputs = _dense_classifier_head(x, n_classes)
+    return _compile_classifier(tf.keras.Model(inputs, outputs), lr, n_classes)
 
 
-def build_classifier(architecture: str, lookback: int, n_features: int, lr: float) -> tf.keras.Model:
+def build_classifier(
+    architecture: str, lookback: int, n_features: int, lr: float, n_classes: int = 2
+) -> tf.keras.Model:
     builders = {
         "gru": build_gru_classifier,
         "tcn": build_tcn_classifier,
@@ -381,11 +560,14 @@ def build_classifier(architecture: str, lookback: int, n_features: int, lr: floa
     }
     if architecture not in builders:
         raise ValueError(f"Unknown architecture {architecture!r}; expected one of {sorted(builders)}")
-    return builders[architecture](lookback, n_features, lr)
+    return builders[architecture](lookback, n_features, lr, n_classes)
 
 
 def as_class_predictions(pred: np.ndarray, threshold: float = 0.5) -> np.ndarray:
-    probs = np.asarray(pred, dtype=np.float32).reshape(-1)
+    pred = np.asarray(pred, dtype=np.float32)
+    if pred.ndim == 2 and pred.shape[1] > 1:  # softmax probabilities -> argmax
+        return np.argmax(pred, axis=1).astype(np.float32)
+    probs = pred.reshape(-1)
     return (probs >= threshold).astype(np.float32)
 
 

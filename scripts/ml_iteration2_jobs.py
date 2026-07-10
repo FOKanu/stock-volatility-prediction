@@ -16,6 +16,11 @@ ARCHITECTURES: dict[str, str] = {
     "e": "xgb",
 }
 
+# Extra candidates only available for regression jobs (no classifier builder).
+REGRESSION_ONLY_ARCHITECTURES: dict[str, str] = {
+    "f": "garchgru",
+}
+
 ARCHITECTURE_LABELS: dict[str, str] = {
     "baseline": "Ridge on last-day features (trainable linear baseline)",
     "gru": "2-layer GRU (64 units, dropout 0.2)",
@@ -23,6 +28,7 @@ ARCHITECTURE_LABELS: dict[str, str] = {
     "lstm": "2-layer LSTM (64 units, dropout 0.2)",
     "cnn1d": "1D CNN (Conv1D stack + GAP)",
     "xgb": "Histogram gradient boosting on flattened sequences",
+    "garchgru": "GARCH(1,1)-GRU hybrid cell (embedded conditional-variance recursion)",
 }
 
 # Primary metric used to compare models against the baseline within a job.
@@ -130,7 +136,11 @@ def all_notebook_specs() -> list[NotebookSpec]:
         target_type: str,
         primary_metric: str,
     ) -> None:
-        for letter, arch in ARCHITECTURES.items():
+        arch_map = dict(ARCHITECTURES)
+        # GARCH hybrids only make sense for volatility regression targets.
+        if job_slug == "vol_risk":
+            arch_map.update(REGRESSION_ONLY_ARCHITECTURES)
+        for letter, arch in arch_map.items():
             for universe in universes:
                 specs.append(
                     NotebookSpec(
@@ -237,6 +247,7 @@ def filter_notebook_specs(
     job_slug: str | None = None,
     universe: str | None = None,
     status: str | None = None,
+    architecture: str | None = None,
 ) -> list[NotebookSpec]:
     """Narrow notebook specs for targeted scaffold runs."""
     out = specs
@@ -248,6 +259,8 @@ def filter_notebook_specs(
         out = [s for s in out if s.universe == universe]
     if status is not None:
         out = [s for s in out if s.status == status]
+    if architecture is not None:
+        out = [s for s in out if s.architecture == architecture]
     return out
 
 

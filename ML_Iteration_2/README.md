@@ -30,6 +30,16 @@ ML_Iteration_2/
 | c | `lstm` | Candidate model |
 | d | `cnn1d` | Candidate model |
 | e | `xgb` | Candidate model |
+| f | `garchgru` | GARCH(1,1)-GRU hybrid cell (vol_risk regression only) |
+
+Regression notebooks expose a `LOSS` config (`"huber"` default, `"qlike"` for asymmetric
+vol-underprediction penalty) and record under/over-prediction MAE in the payload.
+
+Regenerate a single architecture without touching trained notebooks:
+
+```bash
+python scripts/scaffold_ml_iteration2_notebooks.py --job-slug vol_risk --architecture garchgru
+```
 
 ## Kernel (important)
 
@@ -101,11 +111,17 @@ Example: `gru_vol_risk_stocks_dev200_tf_predictions.json`
 
 ## Run order
 
-1. ~~**J01 stocks + etfs**~~ — champions: **xgb** (`champions.json`)
+1. ~~**J01 stocks + etfs**~~ — champions: **garchgru** (stocks), **xgb** (etfs) — see `champions.json` and `SESSION_HANDOFF.md`
 2. **J02 market** — run `00a` baseline, then `02a`–`02e` (SPY regime lane first)
 3. **J02 stocks / etfs** — same bake-off pattern with `vol_regime_21` artifacts
 4. `python scripts/compare_job_models.py --job-slug vol_regime --universe market --dataset-tag dev200`
 5. Pick champions → optional `RUN_MODE = "full"` re-run
+
+## Post-hoc risk layers (00_orchestration)
+
+- `00b_conformal_risk_bands.ipynb` — SPCI-style conformal intervals from saved predictions
+  (`scripts/conformal.py`); the COVID coverage gap doubles as a regime-shift detector.
+- `scripts/drift_monitor.py` — MMD feature-drift health check (calibrated threshold).
 
 ## Product mapping
 

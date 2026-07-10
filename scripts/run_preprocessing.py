@@ -171,6 +171,18 @@ def forward_realized_vol(log_returns: pd.Series, horizon: int) -> pd.Series:
     return pd.Series(out, index=log_returns.index)
 
 
+def forward_mean_return(log_returns: pd.Series, horizon: int) -> pd.Series:
+    """Mean of the next `horizon` daily log returns (exclusive of same-day return)."""
+    arr = log_returns.to_numpy(dtype=np.float64)
+    out = np.full(len(arr), np.nan, dtype=np.float64)
+    for i in range(len(arr) - horizon):
+        window = arr[i + 1 : i + 1 + horizon]
+        if np.isnan(window).any():
+            continue
+        out[i] = float(np.mean(window))
+    return pd.Series(out, index=log_returns.index)
+
+
 def add_target(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
     out = df.copy()
     horizon = int(cfg["target_horizon_days"])
@@ -186,6 +198,12 @@ def add_target(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
         out["target"] = np.nan
         return out
 
+    if target_type == "vol_regime3_21":
+        out["forward_vol"] = forward_realized_vol(out["log_return"], horizon)
+        out["forward_ret"] = forward_mean_return(out["log_return"], horizon)
+        out["target"] = np.nan
+        return out
+
     raise ValueError(f"Unsupported target_type: {target_type!r}")
 
 
@@ -196,6 +214,35 @@ def apply_regime_threshold(model_df: pd.DataFrame, train_end: pd.Timestamp) -> t
     out = model_df.copy()
     out["target"] = (out["forward_vol"] >= threshold).astype(np.float32)
     return out, threshold
+
+
+def apply_regime3_thresholds(
+    model_df: pd.DataFrame, train_end: pd.Timestamp, crisis_quantile: float = 0.90
+) -> tuple[pd.DataFrame, dict]:
+    """Three latent states from forward vol + forward mean return (train thresholds).
+
+    0 = bull   (non-crisis vol, non-negative forward mean return)
+    1 = bear   (non-crisis vol, negative forward mean return)
+    2 = crisis (forward vol >= train `crisis_quantile`, regardless of return sign)
+    """
+    train_mask = model_df["Date"] <= train_end
+    crisis_threshold = float(model_df.loc[train_mask, "forward_vol"].quantile(crisis_quantile))
+    out = model_df.copy()
+    crisis = out["forward_vol"] >= crisis_threshold
+    bear = (~crisis) & (out["forward_ret"] < 0)
+    out["target"] = np.where(crisis, 2.0, np.where(bear, 1.0, 0.0)).astype(np.float32)
+
+    train_targets = out.loc[train_mask, "target"]
+    info = {
+        "crisis_quantile": crisis_quantile,
+        "crisis_threshold": crisis_threshold,
+        "train_class_rates": {
+            "bull": float((train_targets == 0).mean()),
+            "bear": float((train_targets == 1).mean()),
+            "crisis": float((train_targets == 2).mean()),
+        },
+    }
+    return out, info
 
 
 def build_sequences(
@@ -376,6 +423,8 @@ def run_pipeline(
         drop_cols = feature_cols + ["Date", "Symbol"]
         if cfg["target_type"] == "vol_regime_21":
             drop_cols.append("forward_vol")
+        elif cfg["target_type"] == "vol_regime3_21":
+            drop_cols.extend(["forward_vol", "forward_ret"])
         else:
             drop_cols.append("target")
         model_df = feat.dropna(subset=drop_cols).reset_index(drop=True)
@@ -388,8 +437,16 @@ def run_pipeline(
 
     model_df = pd.concat(model_frames, ignore_index=True)
     regime_threshold = None
+    regime3_info = None
     if cfg["target_type"] == "vol_regime_21":
         model_df, regime_threshold = apply_regime_threshold(model_df, train_end)
+        model_frames = [
+            model_df[model_df["Symbol"] == symbol].reset_index(drop=True)
+            for symbol in eligible_symbols
+            if symbol in model_df["Symbol"].values
+        ]
+    elif cfg["target_type"] == "vol_regime3_21":
+        model_df, regime3_info = apply_regime3_thresholds(model_df, train_end)
         model_frames = [
             model_df[model_df["Symbol"] == symbol].reset_index(drop=True)
             for symbol in eligible_symbols
@@ -437,6 +494,8 @@ def run_pipeline(
     if regime_threshold is not None:
         export_cfg["regime_threshold"] = regime_threshold
         export_cfg["train_high_regime_rate"] = float(model_df.loc[train_mask, "target"].mean())
+    if regime3_info is not None:
+        export_cfg["regime3"] = regime3_info
 
     profile = cfg.get("profile", "full")
     print(f"\n=== Profile: {profile} ({len(feature_cols)} features) ===")
@@ -445,6 +504,14 @@ def run_pipeline(
     if cfg["target_type"] == "abs_return":
         print(f"Target mean |log return| (all): {model_df['target'].mean():.6f}")
         print(f"Target median (train): {export_cfg['train_target_median']:.6f}")
+    elif cfg["target_type"] == "vol_regime3_21":
+        rates = regime3_info["train_class_rates"]
+        print(
+            f"Train class rates: bull={rates['bull']:.3f} bear={rates['bear']:.3f} "
+            f"crisis={rates['crisis']:.3f}"
+        )
+        print(f"Crisis threshold (train q{regime3_info['crisis_quantile']:.2f} fwd vol): "
+              f"{regime3_info['crisis_threshold']:.6f}")
     else:
         print(f"Target high-regime rate (all): {model_df['target'].mean():.3f}")
         print(f"Target high-regime rate (train): {export_cfg['train_target_mean']:.3f}")
@@ -550,6 +617,10 @@ def validate_pipeline_result(result: dict) -> None:
         checks["target_type_is_vol_regime"] = True
         checks["y_is_binary"] = set(np.unique(y["train"]).tolist()).issubset({0.0, 1.0})
         checks["regime_threshold_documented"] = "regime_threshold" in cfg
+    elif target_type == "vol_regime3_21":
+        checks["target_type_is_vol_regime3"] = True
+        checks["y_is_ternary"] = set(np.unique(y["train"]).tolist()).issubset({0.0, 1.0, 2.0})
+        checks["regime3_thresholds_documented"] = "regime3" in cfg
     else:
         raise ValueError(f"Unsupported target_type for validation: {target_type!r}")
 
@@ -562,6 +633,7 @@ def validate_pipeline_result(result: dict) -> None:
 TARGET_HORIZON_BY_TYPE = {
     "abs_return": 1,
     "vol_regime_21": 21,
+    "vol_regime3_21": 21,
 }
 
 
@@ -601,7 +673,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--target-type",
-        choices=["abs_return", "vol_regime_21"],
+        choices=["abs_return", "vol_regime_21", "vol_regime3_21"],
         default="abs_return",
         help="Label to export in sequence bundles",
     )

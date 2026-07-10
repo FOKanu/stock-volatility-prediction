@@ -608,12 +608,20 @@ print(f"Crisis macro-F1: {{crisis_macro_f1:.4f}}")
 {comparison}'''
 
     if spec.architecture == "xgb":
-        return f'''{NOTEBOOK_IMPORT_BOOTSTRAP}from tf_notebook_utils import make_tf_datasets, persistence_mae, train_hist_gradient_boosting, as_1d_predictions, make_single_epoch_history
+        return f'''{NOTEBOOK_IMPORT_BOOTSTRAP}from tf_notebook_utils import (
+    make_tf_datasets,
+    persistence_mae,
+    train_hist_gradient_boosting,
+    as_1d_predictions,
+    make_single_epoch_history,
+    asymmetric_error_metrics,
+)
 
 BATCH_SIZE = 512 if device_info["using_gpu"] else 1024
 EPOCHS = TRAIN_EPOCHS
 PATIENCE = 15
 LR = 1e-3
+LOSS = "absoluteerror"  # xgboost objective (reg:absoluteerror)
 
 n_features = X_train.shape[-1]
 lookback = X_train.shape[1]
@@ -645,8 +653,15 @@ train_mean = float(np.mean(y_train))
 train_mean_mae_val = float(np.mean(np.abs(train_mean - y_val)))
 train_mean_mae_test = float(np.mean(np.abs(train_mean - y_test)))
 
+asym_val = asymmetric_error_metrics(y_val, val_pred)
+asym_crisis = asymmetric_error_metrics(y_test, test_pred)
+
 print(f"Val  MAE: {{val_mae:.6f}} | RMSE: {{val_rmse:.6f}}")
 print(f"Crisis MAE (Test 2020 Q1): {{test_mae:.6f}} | RMSE: {{test_rmse:.6f}}")
+print(
+    f"Crisis asymmetry: under-MAE {{asym_crisis['under_mae']:.6f}} vs over-MAE "
+    f"{{asym_crisis['over_mae']:.6f}} (under-prediction rate {{asym_crisis['under_rate']:.1%}})"
+)
 print("Baselines:")
 print(f"  Persistence MAE (val):  {{persistence_mae_val:.6f}}")
 print(f"  Persistence MAE (test): {{persistence_mae_test:.6f}}")
@@ -654,18 +669,29 @@ print(f"  Train-mean MAE (test):  {{train_mean_mae_test:.6f}}")
 {comparison}
 '''
 
-    return f'''{NOTEBOOK_IMPORT_BOOTSTRAP}from tf_notebook_utils import build_regressor, make_tf_datasets, persistence_mae, as_1d_predictions
+    return f'''{NOTEBOOK_IMPORT_BOOTSTRAP}from tf_notebook_utils import (
+    build_regressor,
+    make_tf_datasets,
+    persistence_mae,
+    as_1d_predictions,
+    asymmetric_error_metrics,
+)
 
 BATCH_SIZE = 512 if device_info["using_gpu"] else 1024
 EPOCHS = TRAIN_EPOCHS
 PATIENCE = 15
 LR = 1e-3
+LOSS = "huber"  # "huber" | "qlike" | "mse" — qlike penalizes vol underprediction harder
 
 n_features = X_train.shape[-1]
 lookback = X_train.shape[1]
 
+ARCH_KWARGS = {{}}
+if ARCHITECTURE == "garchgru":
+    ARCH_KWARGS["return_idx"] = bundle.feature_cols.index("log_return")
+
 train_ds, val_ds = make_tf_datasets(X_train, y_train, X_val, y_val, batch_size=BATCH_SIZE)
-model = build_regressor(ARCHITECTURE, lookback, n_features, lr=LR)
+model = build_regressor(ARCHITECTURE, lookback, n_features, lr=LR, loss=LOSS, **ARCH_KWARGS)
 model.summary()
 
 steps_per_epoch = int(np.ceil(len(X_train) / BATCH_SIZE))
@@ -720,9 +746,16 @@ train_mean = float(np.mean(y_train))
 train_mean_mae_val = float(np.mean(np.abs(train_mean - y_val)))
 train_mean_mae_test = float(np.mean(np.abs(train_mean - y_test)))
 
+asym_val = asymmetric_error_metrics(y_val, val_pred)
+asym_crisis = asymmetric_error_metrics(y_test, test_pred)
+
 print(f"Best epoch: {{best_epoch}} | Best val MAE: {{best_val_mae:.6f}}")
 print(f"Val  MAE: {{val_mae:.6f}} | RMSE: {{val_rmse:.6f}}")
 print(f"Crisis MAE (Test 2020 Q1): {{test_mae:.6f}} | RMSE: {{test_rmse:.6f}}")
+print(
+    f"Crisis asymmetry: under-MAE {{asym_crisis['under_mae']:.6f}} vs over-MAE "
+    f"{{asym_crisis['over_mae']:.6f}} (under-prediction rate {{asym_crisis['under_rate']:.1%}})"
+)
 print("Baselines:")
 print(f"  Persistence MAE (val):  {{persistence_mae_val:.6f}}")
 print(f"  Persistence MAE (test): {{persistence_mae_test:.6f}}")
@@ -819,6 +852,10 @@ payload = {{
     "val_rmse": val_rmse,
     "crisis_mae": test_mae,
     "test_rmse": test_rmse,
+    "asymmetric_errors": {{
+        "val": asym_val,
+        "crisis": asym_crisis,
+    }},
     "baselines": {{
         "persistence_mae_val": persistence_mae_val,
         "persistence_mae_test": persistence_mae_test,
@@ -831,7 +868,7 @@ payload = {{
         "epochs": EPOCHS,
         "patience": PATIENCE,
         "lr": LR,
-        "loss": "huber",
+        "loss": LOSS,
         "architecture": ARCHITECTURE,
         "device": device_info,
         "sequences_name": sequences_name,
@@ -1129,6 +1166,11 @@ def main() -> None:
         help="Further limit regeneration to one universe folder",
     )
     parser.add_argument(
+        "--architecture",
+        help="Only regenerate notebooks for one architecture (e.g. garchgru) — "
+        "use to add new candidates without touching trained notebooks",
+    )
+    parser.add_argument(
         "--include-orchestration",
         action="store_true",
         help="Also rewrite 00_orchestration/00a_ensemble_product_scores.ipynb",
@@ -1148,6 +1190,7 @@ def main() -> None:
         job_id=args.job_id,
         job_slug=args.job_slug,
         universe=args.universe,
+        architecture=args.architecture,
     )
     if not specs and not args.include_orchestration:
         raise SystemExit(
@@ -1169,7 +1212,7 @@ def main() -> None:
         created += 1
 
     write_orch = args.include_orchestration or (
-        not args.job_id and not args.job_slug and not args.universe
+        not args.job_id and not args.job_slug and not args.universe and not args.architecture
     )
     if write_orch:
         orch_dir = ML_DIR / "00_orchestration"
