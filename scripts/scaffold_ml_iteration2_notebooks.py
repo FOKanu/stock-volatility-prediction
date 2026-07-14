@@ -10,12 +10,14 @@ from pathlib import Path
 from kernel_config import KERNEL_METADATA, KERNEL_PICKER_HINT
 from ml_iteration2_jobs import (
     ARCHITECTURE_LABELS,
+    JOB_CLASS_LABELS,
     JOB_PRIMARY_METRIC,
     JOB_TASK_KIND,
     ML_DIR,
     NotebookSpec,
     all_notebook_specs_including_baselines,
     filter_notebook_specs,
+    job_n_classes,
     notebook_path,
     target_artifact_suffix,
     universe_prefix,
@@ -72,6 +74,8 @@ source .venv/bin/activate
 def _config_cell(spec: NotebookSpec) -> str:
     prefix = universe_prefix(spec.universe)
     target_suffix = target_artifact_suffix(spec.target_type)
+    n_classes = job_n_classes(spec.job_slug)
+    class_labels = JOB_CLASS_LABELS.get(spec.job_slug, ["class 0", "class 1"])
     return f'''# --- ML Iteration 2 job config (do not rename without updating scaffold) ---
 JOB_ID = "{spec.job_id}"
 JOB_SLUG = "{spec.job_slug}"
@@ -81,6 +85,8 @@ ASSET_TYPE = "{spec.asset_type}"
 TARGET_TYPE = "{spec.target_type}"
 UNIVERSE_PREFIX = "{prefix}"
 TARGET_SUFFIX = "{target_suffix}"
+N_CLASSES = {n_classes}
+CLASS_LABELS = {class_labels!r}
 
 RUN_MODE = "fast_dev"  # "fast_dev" | "full"
 FAST_DEV_MAX_SYMBOLS = 200
@@ -127,10 +133,12 @@ def _preprocess_cell(spec: NotebookSpec) -> str:
 }}
 
 seq_path = processed_dir / sequences_name
+seq_bundle_dir = seq_path.with_suffix("")
 cfg_path = processed_dir / config_name
 scaler_path = processed_dir / scaler_name
 
-artifacts_ready = seq_path.exists() and cfg_path.exists() and scaler_path.exists()
+sequences_ready = seq_bundle_dir.exists() or seq_path.exists()
+artifacts_ready = sequences_ready and cfg_path.exists() and scaler_path.exists()
 
 
 def _backup_full_universe_artifacts() -> Path | None:
@@ -282,13 +290,16 @@ def _baseline_train_cell(spec: NotebookSpec) -> str:
 )
 
 TASK = "{task}"
+BALANCED = N_CLASSES > 2
 print(f"Training baseline ({{ARCHITECTURE}}) — Logistic on last-day features")
-print(f"Task: {{TASK}}")
-model = train_baseline_model(X_train, y_train, task=TASK, seed=SEED)
+print(f"Task: {{TASK}} | classes: {{N_CLASSES}} | balanced: {{BALANCED}}")
+model = train_baseline_model(
+    X_train, y_train, task=TASK, seed=SEED, balanced=BALANCED
+)
 print(f"Baseline backend: {{getattr(model, 'backend', 'unknown')}}")
 
-val_probs = as_1d_predictions(model.predict(X_val))
-test_probs = as_1d_predictions(model.predict(X_test))
+val_probs = np.asarray(model.predict(X_val), dtype=np.float32)
+test_probs = np.asarray(model.predict(X_test), dtype=np.float32)
 val_pred = as_class_predictions(val_probs)
 test_pred = as_class_predictions(test_probs)
 
@@ -405,9 +416,11 @@ payload = {{
     "val_accuracy": val_accuracy,
     "crisis_macro_f1": crisis_macro_f1,
     "crisis_accuracy": crisis_accuracy,
+    "n_classes": N_CLASSES,
     "train_config": {{
         "architecture": ARCHITECTURE,
         "task": TASK,
+        "balanced_class_weights": bool(BALANCED),
         "sequences_name": sequences_name,
     }},
     "history": hist_df.to_dict(orient="records"),
@@ -510,16 +523,18 @@ def _train_cell(spec: NotebookSpec) -> str:
 
 BATCH_SIZE = 512 if device_info["using_gpu"] else 1024
 MAX_TREE_TRAIN = 80_000 if RUN_MODE == "fast_dev" else None
+BALANCED = N_CLASSES > 2
 print(f"Training tree classifier ({{ARCHITECTURE}}) — {arch_label}")
 if MAX_TREE_TRAIN:
     print(f"fast_dev: subsampling tree training to {{MAX_TREE_TRAIN:,}} rows (full val/test kept)")
 model = train_hist_gradient_boosting_classifier(
-    X_train, y_train, X_val, y_val, seed=SEED, max_train_samples=MAX_TREE_TRAIN
+    X_train, y_train, X_val, y_val, seed=SEED, max_train_samples=MAX_TREE_TRAIN,
+    n_classes=N_CLASSES, balanced=BALANCED,
 )
 print(f"Tree backend: {{getattr(model, 'backend', 'unknown')}}")
 
-val_probs = as_1d_predictions(model.predict(X_val, batch_size=BATCH_SIZE, verbose=0))
-test_probs = as_1d_predictions(model.predict(X_test, batch_size=BATCH_SIZE, verbose=0))
+val_probs = np.asarray(model.predict(X_val, batch_size=BATCH_SIZE, verbose=0), dtype=np.float32)
+test_probs = np.asarray(model.predict(X_test, batch_size=BATCH_SIZE, verbose=0), dtype=np.float32)
 val_pred = as_class_predictions(val_probs)
 test_pred = as_class_predictions(test_probs)
 
@@ -538,21 +553,35 @@ print(f"Crisis macro-F1: {{crisis_macro_f1:.4f}} | accuracy: {{crisis_metrics['a
         return f'''{NOTEBOOK_IMPORT_BOOTSTRAP}from tf_notebook_utils import (
     build_classifier,
     make_tf_datasets,
-    as_1d_predictions,
+    predict_in_batches,
     as_class_predictions,
     classification_metrics,
+    compute_class_weights,
+    class_weights_to_sample_weights,
 )
 
 BATCH_SIZE = 512 if device_info["using_gpu"] else 1024
 EPOCHS = TRAIN_EPOCHS
 PATIENCE = 15
 LR = 1e-3
+BALANCED = N_CLASSES > 2
 
 n_features = X_train.shape[-1]
 lookback = X_train.shape[1]
 
-train_ds, val_ds = make_tf_datasets(X_train, y_train, X_val, y_val, batch_size=BATCH_SIZE)
-model = build_classifier(ARCHITECTURE, lookback, n_features, lr=LR)
+train_sample_weight = None
+if BALANCED:
+    class_weights = compute_class_weights(y_train, N_CLASSES)
+    train_sample_weight = class_weights_to_sample_weights(y_train, class_weights)
+    print(f"Balanced class weights: {{ {{k: round(v, 3) for k, v in class_weights.items()}} }}")
+
+train_ds, val_ds = make_tf_datasets(
+    X_train, y_train, X_val, y_val, batch_size=BATCH_SIZE,
+    train_sample_weight=train_sample_weight,
+)
+model = build_classifier(
+    ARCHITECTURE, lookback, n_features, lr=LR, n_classes=N_CLASSES
+)
 model.summary()
 
 steps_per_epoch = int(np.ceil(len(X_train) / BATCH_SIZE))
@@ -564,10 +593,11 @@ if device_info.get("using_gpu"):
         "This is normal — wait for epoch 1/30 output; later epochs are faster."
     )
 
+MONITOR, MONITOR_MODE = ("val_auc", "max") if N_CLASSES == 2 else ("val_loss", "min")
 callbacks = [
     tf.keras.callbacks.EarlyStopping(
-        monitor="val_auc",
-        mode="max",
+        monitor=MONITOR,
+        mode=MONITOR_MODE,
         patience=PATIENCE,
         restore_best_weights=True,
     ),
@@ -590,8 +620,11 @@ with tf.device("/GPU:0" if device_info["using_gpu"] else "/CPU:0"):
         verbose=1,
     )
 
-val_probs = as_1d_predictions(model.predict(X_val, batch_size=BATCH_SIZE, verbose=0))
-test_probs = as_1d_predictions(model.predict(X_test, batch_size=BATCH_SIZE, verbose=0))
+val_probs = predict_in_batches(model, X_val, BATCH_SIZE)
+test_probs = predict_in_batches(model, X_test, BATCH_SIZE)
+if N_CLASSES == 2:
+    val_probs = val_probs.reshape(-1)
+    test_probs = test_probs.reshape(-1)
 val_pred = as_class_predictions(val_probs)
 test_pred = as_class_predictions(test_probs)
 
@@ -600,7 +633,8 @@ crisis_metrics = classification_metrics(y_test, test_pred)
 val_macro_f1 = val_metrics["macro_f1"]
 crisis_macro_f1 = crisis_metrics["macro_f1"]
 
-best_epoch = int(np.argmax(history.history["val_auc"]) + 1)
+monitor_hist = history.history[MONITOR]
+best_epoch = int((np.argmax if MONITOR_MODE == "max" else np.argmin)(monitor_hist) + 1)
 best_val_macro_f1 = val_macro_f1
 
 print(f"Best epoch: {{best_epoch}} | Val macro-F1: {{val_macro_f1:.4f}}")
@@ -672,6 +706,7 @@ print(f"  Train-mean MAE (test):  {{train_mean_mae_test:.6f}}")
     return f'''{NOTEBOOK_IMPORT_BOOTSTRAP}from tf_notebook_utils import (
     build_regressor,
     make_tf_datasets,
+    predict_in_batches,
     persistence_mae,
     as_1d_predictions,
     asymmetric_error_metrics,
@@ -729,8 +764,8 @@ with tf.device("/GPU:0" if device_info["using_gpu"] else "/CPU:0"):
         verbose=1,
     )
 
-val_pred = as_1d_predictions(model.predict(X_val, batch_size=BATCH_SIZE, verbose=0))
-test_pred = as_1d_predictions(model.predict(X_test, batch_size=BATCH_SIZE, verbose=0))
+val_pred = as_1d_predictions(predict_in_batches(model, X_val, BATCH_SIZE))
+test_pred = as_1d_predictions(predict_in_batches(model, X_test, BATCH_SIZE))
 
 val_mae = float(np.mean(np.abs(val_pred - y_val)))
 val_rmse = float(np.sqrt(np.mean((val_pred - y_val) ** 2)))
@@ -797,13 +832,15 @@ payload = {{
     "val_accuracy": val_metrics["accuracy"],
     "crisis_macro_f1": crisis_macro_f1,
     "crisis_accuracy": crisis_metrics["accuracy"],
+    "n_classes": N_CLASSES,
     "baseline_comparison": baseline_comparison,
     "train_config": {{
         "batch_size": BATCH_SIZE,
         "epochs": EPOCHS if ARCHITECTURE != "xgb" else 1,
         "patience": PATIENCE if ARCHITECTURE != "xgb" else 0,
         "lr": LR if ARCHITECTURE != "xgb" else 0.0,
-        "loss": "binary_crossentropy",
+        "loss": "binary_crossentropy" if N_CLASSES == 2 else "sparse_categorical_crossentropy",
+        "balanced_class_weights": bool(BALANCED),
         "architecture": ARCHITECTURE,
         "device": device_info,
         "sequences_name": sequences_name,
@@ -906,7 +943,7 @@ def _evaluate_cell(spec: NotebookSpec) -> str:
         "val_loss": history.history["val_loss"],
         "val_score": history.history.get(
             "val_auc",
-            history.history.get("val_mae", [0.0]),
+            history.history.get("val_accuracy", history.history.get("val_mae", [0.0])),
         ),
     }}
 )
@@ -931,8 +968,10 @@ from sklearn.metrics import ConfusionMatrixDisplay, confusion_matrix
 def plot_confusion(y_true: np.ndarray, y_pred: np.ndarray, title: str) -> None:
     fig, ax = plt.subplots(figsize=(4.5, 4))
     ConfusionMatrixDisplay(
-        confusion_matrix(y_true.astype(int), y_pred.astype(int)),
-        display_labels=["low vol", "high vol"],
+        confusion_matrix(
+            y_true.astype(int), y_pred.astype(int), labels=list(range(N_CLASSES))
+        ),
+        display_labels=CLASS_LABELS,
     ).plot(ax=ax, colorbar=False, cmap="Blues")
     ax.set_title(title)
     plt.tight_layout()
@@ -943,7 +982,7 @@ plot_confusion(y_test, test_pred, "{model_label} — COVID test")
 
 from tf_notebook_utils import classification_metrics
 
-majority_class = int(round(float(np.mean(y_train))))
+majority_class = int(np.bincount(np.asarray(y_train).astype(int)).argmax())
 majority_val = classification_metrics(
     y_val, np.full(len(y_val), majority_class, dtype=np.float32)
 )
@@ -1070,6 +1109,19 @@ def _scaffold_notebook(spec: NotebookSpec) -> dict:
 
     template = json.loads(TEMPLATE_PATH.read_text())
     nb = copy.deepcopy(template)
+    load_source = "".join(nb["cells"][8]["source"])
+    eager_copy = """X_train = bundle.X_train.astype(np.float32)
+y_train = bundle.y_train.astype(np.float32)
+X_val = bundle.X_val.astype(np.float32)
+y_val = bundle.y_val.astype(np.float32)
+X_test = bundle.X_test.astype(np.float32)
+y_test = bundle.y_test.astype(np.float32)"""
+    lazy_arrays = """# Keep disk-backed full-universe arrays lazy; .astype() would copy them into RAM.
+X_train, y_train = bundle.X_train, bundle.y_train
+X_val, y_val = bundle.X_val, bundle.y_val
+X_test, y_test = bundle.X_test, bundle.y_test"""
+    load_source = load_source.replace(eager_copy, lazy_arrays)
+    nb["cells"][8]["source"] = load_source.splitlines(keepends=True)
     nb["cells"][0]["source"] = _title_cell(spec).splitlines(keepends=True)
     nb["cells"][2]["source"] = _config_cell(spec).splitlines(keepends=True)
     nb["cells"][5]["source"] = (

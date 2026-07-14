@@ -2,14 +2,26 @@
   "job_id": "01",
   "job_slug": "vol_risk",
   "dataset_tag": "dev200",
-  "status": "complete",
+  "status": "full_bakeoff_partial",
   "baseline": {
     "stocks": {
-      "notebook": "J01_vol_risk/stocks/00a_baseline_vol_risk_stocks.ipynb",
-      "predictions_json": "baseline_vol_risk_stocks_dev200_tf_predictions.json",
-      "val_mae": 0.015471088699996471,
-      "crisis_mae": 0.02695477567613125,
-      "trained_at": "2026-06-30T01:05:00+00:00"
+      "dev200": {
+        "notebook": "J01_vol_risk/stocks/00a_baseline_vol_risk_stocks.ipynb",
+        "predictions_json": "baseline_vol_risk_stocks_dev200_tf_predictions.json",
+        "val_mae": 0.015471088699996471,
+        "crisis_mae": 0.02695477567613125,
+        "trained_at": "2026-06-30T01:05:00+00:00"
+      },
+      "full": {
+        "notebook": "J01_vol_risk/stocks/00a_baseline_vol_risk_stocks.ipynb",
+        "predictions_json": "baseline_vol_risk_stocks_tf_predictions.json",
+        "n_symbols": 1838,
+        "val_mae": 0.014269806146621704,
+        "crisis_mae": 0.025907516479492188,
+        "val_top10_vol_auc": 0.774872,
+        "crisis_top10_vol_auc": 0.840552,
+        "trained_at": "2026-07-11T23:51:15.890431+00:00"
+      }
     },
     "etfs": {
       "notebook": "J01_vol_risk/etfs/00a_baseline_vol_risk_etfs.ipynb",
@@ -19,9 +31,47 @@
       "trained_at": "2026-06-30T03:14:00+00:00"
     }
   },
+  "full_universe_bakeoff": {
+    "stocks": {
+      "status": "garchgru_vs_baseline_complete",
+      "n_symbols": 1838,
+      "compared_at": "2026-07-12T00:00:00+00:00",
+      "candidates": {
+        "garchgru": {
+          "predictions_json": "garchgru_vol_risk_stocks_tf_predictions.json",
+          "val_mae": 0.013527,
+          "crisis_mae": 0.026107,
+          "val_top10_vol_auc": 0.807427,
+          "crisis_top10_vol_auc": 0.790045,
+          "best_epoch": 12,
+          "trained_at": "2026-07-11T23:35:51.321548+00:00"
+        },
+        "baseline": {
+          "predictions_json": "baseline_vol_risk_stocks_tf_predictions.json",
+          "val_mae": 0.014269806146621704,
+          "crisis_mae": 0.025907516479492188,
+          "val_top10_vol_auc": 0.774872,
+          "crisis_top10_vol_auc": 0.840552,
+          "best_epoch": 1,
+          "trained_at": "2026-07-11T23:51:15.890431+00:00"
+        }
+      },
+      "delta_garchgru_vs_baseline": {
+        "val_mae": -0.000742,
+        "crisis_mae": 0.000199,
+        "val_top10_vol_auc": 0.032555,
+        "crisis_top10_vol_auc": -0.050507
+      },
+      "beats_baseline_val_mae": true,
+      "beats_baseline_crisis_mae": false,
+      "promotion_eligible": false,
+      "verdict": "GARCH-GRU wins val MAE and val AUC but loses crisis MAE and crisis AUC. No full-universe champion promotion per rubric."
+    }
+  },
   "champions": {
     "stocks": {
       "architecture": "garchgru",
+      "dataset_tag": "dev200",
       "notebook": "J01_vol_risk/stocks/01f_garchgru_vol_risk_stocks.ipynb",
       "predictions_json": "garchgru_vol_risk_stocks_dev200_tf_predictions.json",
       "val_mae": 0.014569725841283798,
@@ -29,7 +79,7 @@
       "beats_baseline_val": true,
       "beats_baseline_crisis": true,
       "selected_at": "2026-07-10T00:45:00+00:00",
-      "notes": "Only candidate beating baseline on BOTH val and crisis MAE; lowest crisis MAE overall (rubric priority 2). XGB retains best val MAE (0.014261) but loses to baseline in the COVID window (0.028041). Previous champion: xgb (selected 2026-07-01)."
+      "notes": "Dev200 champion. Full-universe GARCH-GRU (2026-07-11) beats full baseline on val MAE but loses crisis MAE (0.02611 vs 0.02591); promotion withheld. Previous champion: xgb (selected 2026-07-01)."
     },
     "etfs": {
       "architecture": "xgb",

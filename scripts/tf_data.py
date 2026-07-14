@@ -45,6 +45,12 @@ class SequenceBundle:
     feature_cols: list[str]
     cfg: dict
     scaler: dict
+    storage_format: str = "npz"
+    bundle_dir: Path | None = None
+
+    @property
+    def is_disk_backed(self) -> bool:
+        return self.storage_format == "memmap_v1"
 
 
 def load_sequence_bundle(
@@ -59,6 +65,43 @@ def load_sequence_bundle(
         sequences_name, config_name, scaler_name
     )
     seq_path = processed_dir / sequences_name
+    # Full-universe bundles use a directory with the same stem as the legacy
+    # .npz name. Prefer it when both exist so a stale NPZ can never shadow a
+    # verified disk-backed rebuild.
+    bundle_dir = seq_path.with_suffix("") if seq_path.suffix == ".npz" else seq_path
+    manifest_path = bundle_dir / "manifest.json"
+    if manifest_path.exists():
+        manifest = json.loads(manifest_path.read_text())
+        if manifest.get("format") != "memmap_v1":
+            raise ValueError(f"Unsupported sequence bundle format: {manifest.get('format')!r}")
+        arrays: dict[str, np.ndarray] = {}
+        for split_name, spec in manifest["splits"].items():
+            arrays[f"X_{split_name}"] = np.load(bundle_dir / spec["X"], mmap_mode="r")
+            arrays[f"y_{split_name}"] = np.load(bundle_dir / spec["y"], mmap_mode="r")
+        cfg_path = processed_dir / config_name
+        scaler_path = processed_dir / scaler_name
+        if not cfg_path.exists():
+            cfg_path = bundle_dir / "pipeline_config.json"
+        if not scaler_path.exists():
+            scaler_path = bundle_dir / "scaler.json"
+        with open(cfg_path) as f:
+            cfg = json.load(f)
+        with open(scaler_path) as f:
+            scaler = json.load(f)
+        return SequenceBundle(
+            X_train=arrays["X_train"],
+            y_train=arrays["y_train"],
+            X_val=arrays["X_val"],
+            y_val=arrays["y_val"],
+            X_test=arrays["X_test"],
+            y_test=arrays["y_test"],
+            feature_cols=[str(c) for c in manifest["feature_cols"]],
+            cfg=cfg,
+            scaler=scaler,
+            storage_format="memmap_v1",
+            bundle_dir=bundle_dir,
+        )
+
     if not seq_path.exists():
         raise FileNotFoundError(f"Sequences not found at {seq_path}")
 
@@ -79,4 +122,5 @@ def load_sequence_bundle(
         feature_cols=feature_cols,
         cfg=cfg,
         scaler=scaler,
+        storage_format="npz",
     )

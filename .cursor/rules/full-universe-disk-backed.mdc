@@ -1,0 +1,22 @@
+---
+description: Require memory-safe disk-backed processing for full-universe ML jobs
+alwaysApply: true
+---
+
+# Full-Universe Data Safety
+
+- Full-universe preprocessing and training MUST be disk-backed and chunked.
+- Never accumulate all per-symbol sequence arrays in lists, call a full-universe
+  `np.concatenate`, or copy a complete memmap with `.astype()` / TensorFlow
+  `from_tensor_slices`.
+- Use the `memmap_v1` manifest bundle: read-only `.npy` memmaps, streaming
+  scaler statistics, atomic staging/publish, and chunked TensorFlow batches.
+- Full runs use `run_preprocessing.py --storage-format memmap` (or `auto` with
+  uncapped `--symbol-scope all`). `dev200` and smaller experiments may retain
+  compressed NPZ artifacts.
+- Before training, verify the manifest/config symbol count and split shapes.
+  A filename containing `full` is not proof of universe coverage.
+- Never rerun after an OOM without identifying the peak-memory operation and
+  changing it. Preserve at least 25% WSL memory headroom.
+- Update `ML_Iteration_2/SESSION_HANDOFF.md` whenever the storage contract or
+  full-universe operational procedure changes.

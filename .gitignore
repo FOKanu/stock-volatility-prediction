@@ -18,6 +18,8 @@ Stock Market Dataset/
 data/processed/stocks_universe_vol_regime_21_model_frame_plus5.csv
 data/processed/etfs_universe_vol_regime_21_model_frame_plus5.csv
 data/processed/etfs_universe_model_frame_plus5.csv
+data/processed/*_sequences_plus5/
+data/processed/*.stale.npz
 
 # Scaffold / untrained notebooks — regenerate locally:
 #   python scripts/scaffold_ml_iteration2_notebooks.py --job-slug <slug>
@@ -34,6 +36,8 @@ data/models/tcn_predictions.json
 data/models/tcn_v2_eval_latest.json
 data/models/v2_eval_comparison.json
 data/models/vol_gru_stocks_universe_plus5_*
+data/models/.backup_*
+data/models/*_epoch*.keras
 
 # Scratch
 untitled.chat

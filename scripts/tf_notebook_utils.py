@@ -88,17 +88,106 @@ def make_tf_datasets(
     y_val: np.ndarray,
     batch_size: int,
     shuffle_buffer: int = 100_000,
+    train_sample_weight: np.ndarray | None = None,
+    disk_block_rows: int = 65_536,
 ) -> tuple[tf.data.Dataset, tf.data.Dataset]:
-    """Build prefetched tf.data pipelines for GPU training."""
+    """Build prefetched pipelines without materializing memmaps in RAM."""
     autotune = tf.data.AUTOTUNE
 
     def _dataset(X: np.ndarray, y: np.ndarray, train: bool) -> tf.data.Dataset:
-        ds = tf.data.Dataset.from_tensor_slices((X, y))
+        if isinstance(X, np.memmap) or isinstance(y, np.memmap):
+            n_rows = len(y)
+            n_batches = sum(
+                int(np.ceil((min(start + disk_block_rows, n_rows) - start) / batch_size))
+                for start in range(0, n_rows, disk_block_rows)
+            )
+
+            def generator():
+                rng = np.random.default_rng(42)
+                block_starts = np.arange(0, n_rows, disk_block_rows)
+                if train:
+                    rng.shuffle(block_starts)
+                for block_start in block_starts:
+                    block_stop = min(int(block_start) + disk_block_rows, n_rows)
+                    indices = np.arange(int(block_start), block_stop)
+                    if train:
+                        rng.shuffle(indices)
+                    for offset in range(0, len(indices), batch_size):
+                        batch_idx = indices[offset : offset + batch_size]
+                        xb = np.asarray(X[batch_idx], dtype=np.float32)
+                        yb = np.asarray(y[batch_idx], dtype=np.float32)
+                        if train and train_sample_weight is not None:
+                            wb = np.asarray(train_sample_weight[batch_idx], dtype=np.float32)
+                            yield xb, yb, wb
+                        else:
+                            yield xb, yb
+
+            x_spec = tf.TensorSpec(shape=(None, *X.shape[1:]), dtype=tf.float32)
+            y_spec = tf.TensorSpec(shape=(None,), dtype=tf.float32)
+            if train and train_sample_weight is not None:
+                signature = (
+                    x_spec,
+                    y_spec,
+                    tf.TensorSpec(shape=(None,), dtype=tf.float32),
+                )
+            else:
+                signature = (x_spec, y_spec)
+            ds = tf.data.Dataset.from_generator(generator, output_signature=signature)
+            return ds.apply(tf.data.experimental.assert_cardinality(n_batches)).prefetch(autotune)
+
+        tensors = (X, y)
+        if train and train_sample_weight is not None:
+            tensors = (X, y, train_sample_weight.astype(np.float32))
+        ds = tf.data.Dataset.from_tensor_slices(tensors)
         if train:
             ds = ds.shuffle(shuffle_buffer, seed=42, reshuffle_each_iteration=True)
         return ds.batch(batch_size).prefetch(autotune)
 
     return _dataset(X_train, y_train, True), _dataset(X_val, y_val, False)
+
+
+def predict_in_batches(
+    model: tf.keras.Model,
+    X: np.ndarray,
+    batch_size: int = 512,
+) -> np.ndarray:
+    """Predict over arrays or memmaps with only one contiguous batch resident."""
+    outputs: list[np.ndarray] = []
+    for start in range(0, len(X), batch_size):
+        stop = min(start + batch_size, len(X))
+        batch = np.asarray(X[start:stop], dtype=np.float32)
+        outputs.append(np.asarray(model.predict_on_batch(batch)))
+    if not outputs:
+        output_dim = int(model.output_shape[-1])
+        return np.empty((0, output_dim), dtype=np.float32)
+    return np.concatenate(outputs, axis=0).astype(np.float32, copy=False)
+
+
+def compute_class_weights(y: np.ndarray, n_classes: int) -> dict[int, float]:
+    """Balanced class weights: n_samples / (n_classes * class_count)."""
+    counts = np.zeros(n_classes, dtype=np.int64)
+    for start in range(0, len(y), 1_000_000):
+        counts += np.bincount(
+            np.asarray(y[start : start + 1_000_000]).astype(int),
+            minlength=n_classes,
+        )
+    safe_counts = np.maximum(counts, 1)
+    weights = len(y) / (n_classes * safe_counts)
+    return {cls: float(weight) for cls, weight in enumerate(weights)}
+
+
+def class_weights_to_sample_weights(
+    y: np.ndarray, class_weights: dict[int, float]
+) -> np.ndarray:
+    """Map class weights to a compact per-sample float32 vector."""
+    lookup = np.array(
+        [class_weights[c] for c in range(len(class_weights))], dtype=np.float32
+    )
+    weights = np.empty(len(y), dtype=np.float32)
+    for start in range(0, len(y), 1_000_000):
+        stop = min(start + 1_000_000, len(y))
+        weights[start:stop] = lookup[np.asarray(y[start:stop]).astype(int)]
+    return weights
 
 
 
@@ -425,14 +514,19 @@ def train_baseline_model(
     y_train: np.ndarray,
     task: str = "regression",
     seed: int = 42,
+    balanced: bool = False,
 ):
-    """Trainable baseline: Ridge (regression) or LogisticRegression (classification) on last day."""
+    """Train Ridge or LogisticRegression on last-day features."""
     from sklearn.linear_model import LogisticRegression, Ridge
 
     X_tr = last_timestep_features(X_train)
 
     if task == "classification":
-        sk_model = LogisticRegression(max_iter=1000, random_state=seed)
+        sk_model = LogisticRegression(
+            max_iter=1000,
+            random_state=seed,
+            class_weight="balanced" if balanced else None,
+        )
         sk_model.fit(X_tr, y_train.astype(int))
         backend = "logistic_last_day"
     else:
@@ -441,10 +535,25 @@ def train_baseline_model(
         backend = "ridge_last_day"
 
     class _Wrapper:
-        def predict(self, X: np.ndarray, batch_size: int | None = None, verbose: int = 0) -> np.ndarray:
+        _default_batch_size = 65_536
+
+        def _predict_chunk(self, X: np.ndarray) -> np.ndarray:
             feats = last_timestep_features(X)
-            pred = sk_model.predict(feats)
-            return as_1d_predictions(pred)
+            if task == "classification":
+                probs = sk_model.predict_proba(feats)
+                if probs.shape[1] == 2:
+                    return probs[:, 1].astype(np.float32)
+                return probs.astype(np.float32)
+            return as_1d_predictions(sk_model.predict(feats))
+
+        def predict(self, X: np.ndarray, batch_size: int | None = None, verbose: int = 0) -> np.ndarray:
+            batch_size = batch_size or self._default_batch_size
+            if len(X) <= batch_size:
+                return self._predict_chunk(X)
+            chunks = [self._predict_chunk(X[start : start + batch_size]) for start in range(0, len(X), batch_size)]
+            if task == "classification" and getattr(sk_model, "classes_", np.array([])).shape[0] > 2:
+                return np.concatenate(chunks, axis=0).astype(np.float32)
+            return as_1d_predictions(np.concatenate(chunks, axis=0))
 
         def save(self, path) -> None:
             import joblib
@@ -594,8 +703,10 @@ def train_hist_gradient_boosting_classifier(
     y_val: np.ndarray,
     seed: int = 42,
     max_train_samples: int | None = None,
+    n_classes: int = 2,
+    balanced: bool = False,
 ):
-    """Train a tree classifier; uses xgboost when installed, else sklearn HistGBC."""
+    """Train a binary or multiclass tree classifier."""
     from sklearn.ensemble import HistGradientBoostingClassifier
 
     X_tr, y_tr = _subsample_xy(X_train, y_train, max_train_samples, seed)
@@ -603,6 +714,10 @@ def train_hist_gradient_boosting_classifier(
     X_tr = flatten_sequences(X_tr)
     y_tr_i = y_tr.astype(int)
     y_val_i = y_val.astype(int)
+    sample_weight = None
+    if balanced:
+        class_weights = compute_class_weights(y_tr_i, n_classes)
+        sample_weight = class_weights_to_sample_weights(y_tr_i, class_weights)
 
     print(
         f"Tree training rows: {len(X_tr):,} (features={X_tr.shape[1]:,}) | "
@@ -618,14 +733,21 @@ def train_hist_gradient_boosting_classifier(
             learning_rate=0.05,
             subsample=0.8,
             colsample_bytree=0.8,
-            objective="binary:logistic",
-            eval_metric="logloss",
+            objective="binary:logistic" if n_classes == 2 else "multi:softprob",
+            eval_metric="logloss" if n_classes == 2 else "mlogloss",
+            num_class=None if n_classes == 2 else n_classes,
             random_state=seed,
             n_jobs=-1,
             early_stopping_rounds=25,
             tree_method="hist",
         )
-        model.fit(X_tr, y_tr_i, eval_set=[(X_va, y_val_i)], verbose=False)
+        model.fit(
+            X_tr,
+            y_tr_i,
+            sample_weight=sample_weight,
+            eval_set=[(X_va, y_val_i)],
+            verbose=False,
+        )
         backend = "xgboost"
     except ImportError:
         print("xgboost not installed — using sklearn HistGradientBoostingClassifier (slower).")
@@ -636,18 +758,20 @@ def train_hist_gradient_boosting_classifier(
             random_state=seed,
             early_stopping=True,
             n_iter_no_change=25,
+            class_weight="balanced" if balanced else None,
         )
-        model.fit(X_tr, y_tr_i, X_val=X_va, y_val=y_val_i)
+        model.fit(X_tr, y_tr_i)
         backend = "sklearn_hist_gbc"
 
     class _Wrapper:
         def predict(self, X: np.ndarray, batch_size: int | None = None, verbose: int = 0) -> np.ndarray:
             flat = flatten_sequences(X)
             if hasattr(model, "predict_proba"):
-                probs = model.predict_proba(flat)[:, 1]
-            else:
-                probs = model.predict(flat)
-            return probs.astype(np.float32)
+                probs = model.predict_proba(flat)
+                if probs.shape[1] == 2:
+                    return probs[:, 1].astype(np.float32)
+                return probs.astype(np.float32)
+            return model.predict(flat).astype(np.float32)
 
         def save(self, path) -> None:
             import joblib
