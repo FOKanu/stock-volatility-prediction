@@ -101,6 +101,18 @@ Saved under `data/models/`:
 
 Example: `gru_vol_risk_stocks_dev200_tf_predictions.json`
 
+### Full-universe memory safety
+
+- `dev200` sequence bundles remain compressed NPZ files.
+- Full-universe bundles use the `memmap_v1` directory format and are loaded
+  lazily through `scripts/tf_data.py`.
+- Never call `.astype()` on a complete full-universe split or pass a memmap to
+  `tf.data.Dataset.from_tensor_slices`; both materialize the tensor in RAM.
+- Use `make_tf_datasets()` and `predict_in_batches()` from
+  `scripts/tf_notebook_utils.py`, which automatically stream memmaps.
+- Verify `bundle.cfg["n_symbols"]` and split shapes before training.
+- See `docs/DATASET.md` and `.cursor/rules/full-universe-disk-backed.mdc`.
+
 ## Champion selection (J01)
 
 | Priority | Rule |

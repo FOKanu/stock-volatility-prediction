@@ -3,6 +3,61 @@
 Point a new chat session at this file to resume without prior conversation history.
 Everything below is backed by artifacts in `data/models/` and code in `scripts/`.
 
+## Update 2026-07-11 — mandatory disk-backed full-universe policy
+
+A purported J01 stocks full run was audited and found to use a stale bundle
+containing only AAL/AAME (`n_symbols=2`). A forced rebuild identified 1,838
+eligible stocks, then the old in-memory pipeline reached ~45.8 GiB RSS and the
+Linux OOM killer terminated Python, disrupting the Remote WSL session.
+
+Decision (persisted in `.cursor/rules/full-universe-disk-backed.mdc`):
+
+- Full-universe preprocessing/training MUST be disk-backed and chunked.
+- Full runs use `memmap_v1`: atomic staged directory, `.npy` split memmaps,
+  streaming feature moments, lazy loading, and chunked TensorFlow batches.
+- Dev200 remains compressed NPZ for compatibility.
+- Never concatenate all per-symbol sequences, copy complete memmaps with
+  `.astype()`, or feed memmaps to `from_tensor_slices`.
+- Verify manifest/config symbol counts before training.
+
+The J01 stocks GARCH-GRU notebook is configured for `RUN_MODE="full"` and
+`PATIENCE=8`. The invalid two-symbol full-tag model must not be promoted.
+
+## Update 2026-07-12 — J01 stocks full-universe bake-off (baseline vs GARCH-GRU)
+
+Both models trained on the verified 1,838-symbol `memmap_v1` bundle
+(6,400,094 / 920,149 / 113,705 train/val/test sequences).
+
+| Model | Val MAE | Crisis MAE | Val AUC@90 | Crisis AUC@90 |
+|---|---|---|---|---|
+| Ridge baseline (full) | 0.01427 | **0.02591** | 0.775 | **0.841** |
+| GARCH-GRU (full) | **0.01353** | 0.02611 | **0.807** | 0.790 |
+| Persistence (untrained) | 0.01780 | 0.03320 | — | — |
+
+**Verdict:** GARCH-GRU beats full baseline on val MAE (−5.2%) but **loses on
+crisis MAE** (+0.8%). Per rubric gate (`beats_baseline_val_mae` AND
+`beats_baseline_crisis_mae`), **no full-universe champion promotion**. Dev200
+GARCH-GRU remains recorded champion in `champions.json`.
+
+Artifacts: `baseline_vol_risk_stocks_tf_predictions.json`,
+`garchgru_vol_risk_stocks_tf_predictions.json`. Comparison canvas:
+`canvases/j01-full-universe-bakeoff-comparison.canvas.tsx`.
+
+**Next:** QLIKE GARCH-GRU full-universe run from
+`ML_Iteration_2/J01_vol_risk/stocks/01f_garchgru_vol_risk_stocks.ipynb` with
+`LOSS="qlike"` in section 0 (saves `garchgru_qlike_vol_risk_stocks_tf_*`,
+does not overwrite Huber artifacts). Targets lower crisis under-prediction rate
+(Huber full run: 49.9% vs baseline 44.5%). Dev200 QLIKE GARCH-GRU cut crisis
+under-rate 53%→36% at ~30% MAE cost.
+
+## Update 2026-07-10 — J02 bake-offs complete
+
+- Binary champions: stocks=lstm (val 0.8022/crisis 0.6596), etfs=gru
+  (0.7367/0.5878), market=baseline (0.6597/0.3091).
+- Three-class balanced-weight champions in `J02v2_vol_regime3/champions.json`:
+  stocks=lstm (0.4605/0.3897), etfs=gru (0.4939/0.3957), market=lstm
+  (0.4971/0.2122; all market neural candidates predicted zero COVID crisis days).
+
 ## What was implemented (all merged, all tested)
 
 | Component | Location | Status |

@@ -4,7 +4,10 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -299,9 +302,149 @@ def artifact_paths(
         scaler_name = f"scaler_{stem}{suffix}.json"
     return {
         "sequences": processed_dir / f"{stem}_sequences{suffix}.npz",
+        "sequences_dir": processed_dir / f"{stem}_sequences{suffix}",
         "config": processed_dir / config_name,
         "scaler": processed_dir / scaler_name,
         "model_frame": processed_dir / f"{stem}_model_frame{suffix}.csv",
+    }
+
+
+class StreamingMoments:
+    """Numerically stable feature moments over many flattened sequence batches."""
+
+    def __init__(self, n_features: int):
+        self.count = 0
+        self.mean = np.zeros(n_features, dtype=np.float64)
+        self.m2 = np.zeros(n_features, dtype=np.float64)
+
+    def update(self, values: np.ndarray) -> None:
+        flat = np.asarray(values, dtype=np.float32).reshape(-1, values.shape[-1])
+        if not len(flat):
+            return
+        batch_count = len(flat)
+        batch_mean = flat.mean(axis=0, dtype=np.float64)
+        centered = flat.astype(np.float64) - batch_mean
+        batch_m2 = np.square(centered).sum(axis=0)
+        if self.count == 0:
+            self.count = batch_count
+            self.mean = batch_mean
+            self.m2 = batch_m2
+            return
+        delta = batch_mean - self.mean
+        total = self.count + batch_count
+        self.mean += delta * (batch_count / total)
+        self.m2 += batch_m2 + np.square(delta) * self.count * batch_count / total
+        self.count = total
+
+    def finalize(self) -> tuple[np.ndarray, np.ndarray]:
+        if self.count == 0:
+            raise RuntimeError("Cannot finalize scaler: no training observations.")
+        std = np.sqrt(self.m2 / self.count)
+        std[std == 0] = 1.0
+        return self.mean.astype(np.float32), std.astype(np.float32)
+
+
+def scan_quality_symbols(
+    cfg: dict,
+    symbols: list[str],
+    stocks_dir: Path,
+    etfs_dir: Path,
+    *,
+    strict: bool,
+    history_outlier_filter: str,
+) -> tuple[list[str], dict]:
+    """Quality-filter symbols without retaining every cleaned frame in RAM."""
+    accepted: list[str] = []
+    lengths: dict[str, int] = {}
+    skipped: list[str] = []
+    for index, symbol in enumerate(symbols, 1):
+        raw = load_price_data(symbol, stocks_dir, etfs_dir, asset_type=cfg["asset_type"])
+        metrics = validate_ohlcv(raw, symbol)
+        reason = None
+        if metrics["rows"] < cfg["min_trading_days"]:
+            reason = f"{symbol}: only {metrics['rows']} rows < min {cfg['min_trading_days']}"
+        elif metrics["zero_volume_pct"] > cfg["max_zero_volume_pct"]:
+            reason = (
+                f"{symbol}: zero-volume pct {metrics['zero_volume_pct']:.1%} "
+                f"> threshold {cfg['max_zero_volume_pct']:.0%}"
+            )
+        if reason:
+            if strict:
+                raise ValueError(reason)
+            skipped.append(reason)
+            continue
+        cleaned_rows = len(clean_ohlcv(raw))
+        accepted.append(symbol)
+        lengths[symbol] = cleaned_rows
+        if index % 100 == 0:
+            print(f"Quality scan: {index:,}/{len(symbols):,} symbols")
+
+    if not accepted:
+        raise RuntimeError("No symbols passed quality filters.")
+    if skipped:
+        print(f"Skipped {len(skipped)} symbols failing quality filters.")
+
+    removed: list[str] = []
+    upper_bound = None
+    if history_outlier_filter == "iqr_upper" and len(lengths) >= 4:
+        vals = np.asarray(list(lengths.values()), dtype=np.float64)
+        q1, q3 = np.quantile(vals, [0.25, 0.75])
+        upper_bound = float(q3 + 1.5 * (q3 - q1))
+        removed = sorted(symbol for symbol in accepted if lengths[symbol] > upper_bound)
+        accepted = [symbol for symbol in accepted if symbol not in set(removed)]
+    return accepted, {
+        "method": history_outlier_filter,
+        "removed": removed,
+        "upper_bound": upper_bound,
+    }
+
+
+def _prepare_streaming_frame(
+    symbol: str,
+    cfg: dict,
+    spy_feat: pd.DataFrame,
+    stocks_dir: Path,
+    etfs_dir: Path,
+    *,
+    regime_threshold: float | None = None,
+    crisis_threshold: float | None = None,
+) -> pd.DataFrame:
+    raw = load_price_data(symbol, stocks_dir, etfs_dir, asset_type=cfg["asset_type"])
+    cleaned = clean_ohlcv(raw)
+    cleaned["Symbol"] = symbol
+    feat = engineer_features(cleaned, price_col=cfg["price_col"])
+    feat = merge_spy_features(feat, spy_feat)
+    feat = add_target(feat, cfg)
+    drop_cols = list(cfg["feature_cols"]) + ["Date", "Symbol"]
+    if cfg["target_type"] == "vol_regime_21":
+        drop_cols.append("forward_vol")
+    elif cfg["target_type"] == "vol_regime3_21":
+        drop_cols.extend(["forward_vol", "forward_ret"])
+    else:
+        drop_cols.append("target")
+    frame = feat.dropna(subset=drop_cols).reset_index(drop=True)
+    if cfg["target_type"] == "vol_regime_21":
+        if regime_threshold is None:
+            return frame
+        frame["target"] = (frame["forward_vol"] >= regime_threshold).astype(np.float32)
+    elif cfg["target_type"] == "vol_regime3_21":
+        if crisis_threshold is None:
+            return frame
+        crisis = frame["forward_vol"] >= crisis_threshold
+        bear = (~crisis) & (frame["forward_ret"] < 0)
+        frame["target"] = np.where(crisis, 2.0, np.where(bear, 1.0, 0.0)).astype(np.float32)
+    return frame
+
+
+def _split_masks(dates: pd.DatetimeIndex, cfg: dict) -> dict[str, np.ndarray]:
+    return {
+        "train": dates <= pd.Timestamp(cfg["train_end"]),
+        "val": (dates >= pd.Timestamp(cfg["val_start"])) & (
+            dates <= pd.Timestamp(cfg["val_end"])
+        ),
+        "test": (dates >= pd.Timestamp(cfg["test_start"])) & (
+            dates <= pd.Timestamp(cfg["test_end"])
+        ),
     }
 
 
@@ -586,6 +729,334 @@ def run_pipeline(
     }
 
 
+def run_pipeline_disk_backed(
+    cfg: dict,
+    eligible_symbols: list[str],
+    processed_dir: Path,
+    stocks_dir: Path,
+    etfs_dir: Path,
+) -> dict:
+    """Build a full-universe bundle without materializing all sequences in RAM."""
+    feature_cols = cfg["feature_cols"]
+    n_features = len(feature_cols)
+    lookback = int(cfg["lookback_days"])
+    spy_feat = load_spy_vol_features(stocks_dir, etfs_dir, cfg["price_col"])
+    train_end = pd.Timestamp(cfg["train_end"])
+
+    dataset_id = (
+        eligible_symbols[0]
+        if len(eligible_symbols) == 1
+        else ("stocks_universe" if cfg["asset_type"] == "stock" else "etfs_universe")
+    )
+    paths = artifact_paths(
+        processed_dir,
+        dataset_id,
+        profile=cfg.get("profile", "full"),
+        target_type=cfg["target_type"],
+    )
+
+    # Classification thresholds are pooled across train dates, but only one
+    # lightweight float column is accumulated (not full feature frames).
+    regime_threshold = None
+    crisis_threshold = None
+    if cfg["target_type"] in {"vol_regime_21", "vol_regime3_21"}:
+        forward_vol_train: list[np.ndarray] = []
+        for index, symbol in enumerate(eligible_symbols, 1):
+            frame = _prepare_streaming_frame(
+                symbol, cfg, spy_feat, stocks_dir, etfs_dir
+            )
+            values = frame.loc[frame["Date"] <= train_end, "forward_vol"].to_numpy(
+                dtype=np.float32
+            )
+            if len(values):
+                forward_vol_train.append(values)
+            if index % 100 == 0:
+                print(f"Threshold pass: {index:,}/{len(eligible_symbols):,} symbols")
+        if not forward_vol_train:
+            raise RuntimeError("No training forward-volatility values found.")
+        pooled_vol = np.concatenate(forward_vol_train)
+        if cfg["target_type"] == "vol_regime_21":
+            regime_threshold = float(np.median(pooled_vol))
+        else:
+            crisis_threshold = float(np.quantile(pooled_vol, 0.90))
+        del pooled_vol, forward_vol_train
+
+    # Pass 1: exact split sizes, streaming feature moments, target summaries.
+    split_counts = {"train": 0, "val": 0, "test": 0}
+    split_target_sums = {"train": 0.0, "val": 0.0, "test": 0.0}
+    moments = StreamingMoments(n_features)
+    train_targets: list[np.ndarray] = []
+    class_counts = np.zeros(3, dtype=np.int64)
+    persistence_sum = 0.0
+    persistence_count = 0
+    frame_rows = 0
+    date_min: pd.Timestamp | None = None
+    date_max: pd.Timestamp | None = None
+
+    for index, symbol in enumerate(eligible_symbols, 1):
+        frame = _prepare_streaming_frame(
+            symbol,
+            cfg,
+            spy_feat,
+            stocks_dir,
+            etfs_dir,
+            regime_threshold=regime_threshold,
+            crisis_threshold=crisis_threshold,
+        )
+        if frame.empty:
+            continue
+        frame_rows += len(frame)
+        symbol_min, symbol_max = frame["Date"].min(), frame["Date"].max()
+        date_min = symbol_min if date_min is None else min(date_min, symbol_min)
+        date_max = symbol_max if date_max is None else max(date_max, symbol_max)
+        X_sym, y_sym, seq_dates = build_sequences(
+            frame, feature_cols=feature_cols, lookback=lookback, warmup=cfg["warmup_days"]
+        )
+        masks = _split_masks(seq_dates, cfg)
+        for split_name, mask in masks.items():
+            count = int(mask.sum())
+            split_counts[split_name] += count
+            if count:
+                split_target_sums[split_name] += float(y_sym[mask].sum(dtype=np.float64))
+        train_mask = masks["train"]
+        if train_mask.any():
+            moments.update(X_sym[train_mask])
+            train_y = y_sym[train_mask].astype(np.float32, copy=True)
+            train_targets.append(train_y)
+            if cfg["target_type"] == "vol_regime3_21":
+                class_counts += np.bincount(train_y.astype(int), minlength=3)
+        if cfg["target_type"] == "abs_return" and len(y_sym):
+            abs_idx = feature_cols.index("abs_return")
+            errors = np.abs(X_sym[:, -1, abs_idx] - y_sym)
+            persistence_sum += float(errors.sum(dtype=np.float64))
+            persistence_count += len(errors)
+        if index % 50 == 0:
+            print(
+                f"Counting/scaler pass: {index:,}/{len(eligible_symbols):,} symbols | "
+                f"train rows={split_counts['train']:,}"
+            )
+
+    if not all(split_counts.values()):
+        raise RuntimeError(f"One or more splits are empty: {split_counts}")
+    feat_mean, feat_std = moments.finalize()
+    pooled_train_targets = np.concatenate(train_targets)
+    train_target_mean = float(pooled_train_targets.mean(dtype=np.float64))
+    train_target_median = float(np.median(pooled_train_targets))
+    del pooled_train_targets, train_targets
+
+    export_cfg = {
+        **cfg,
+        "storage_format": "memmap_v1",
+        "n_symbols": len(eligible_symbols),
+        "symbols": eligible_symbols,
+        "split_counts": split_counts,
+        "train_target_mean": train_target_mean,
+        "train_target_median": train_target_median,
+    }
+    if regime_threshold is not None:
+        export_cfg["regime_threshold"] = regime_threshold
+        export_cfg["train_high_regime_rate"] = train_target_mean
+    if crisis_threshold is not None:
+        total_classes = max(int(class_counts.sum()), 1)
+        export_cfg["regime3"] = {
+            "crisis_quantile": 0.90,
+            "crisis_threshold": crisis_threshold,
+            "train_class_rates": {
+                "bull": float(class_counts[0] / total_classes),
+                "bear": float(class_counts[1] / total_classes),
+                "crisis": float(class_counts[2] / total_classes),
+            },
+        }
+    scaler = {
+        "mean": feat_mean.tolist(),
+        "std": feat_std.tolist(),
+        "feature_cols": feature_cols,
+    }
+
+    staging = Path(
+        tempfile.mkdtemp(prefix=f".{paths['sequences_dir'].name}.", dir=processed_dir)
+    )
+    offsets = {"train": 0, "val": 0, "test": 0}
+    arrays: dict[str, np.memmap] = {}
+    try:
+        for split_name in offsets:
+            arrays[f"X_{split_name}"] = np.lib.format.open_memmap(
+                staging / f"X_{split_name}.npy",
+                mode="w+",
+                dtype=np.float32,
+                shape=(split_counts[split_name], lookback, n_features),
+            )
+            arrays[f"y_{split_name}"] = np.lib.format.open_memmap(
+                staging / f"y_{split_name}.npy",
+                mode="w+",
+                dtype=np.float32,
+                shape=(split_counts[split_name],),
+            )
+
+        staged_frame = staging / "model_frame.csv"
+        wrote_header = False
+        for index, symbol in enumerate(eligible_symbols, 1):
+            frame = _prepare_streaming_frame(
+                symbol,
+                cfg,
+                spy_feat,
+                stocks_dir,
+                etfs_dir,
+                regime_threshold=regime_threshold,
+                crisis_threshold=crisis_threshold,
+            )
+            if frame.empty:
+                continue
+            frame.to_csv(staged_frame, mode="a", header=not wrote_header, index=False)
+            wrote_header = True
+            X_sym, y_sym, seq_dates = build_sequences(
+                frame,
+                feature_cols=feature_cols,
+                lookback=lookback,
+                warmup=cfg["warmup_days"],
+            )
+            for split_name, mask in _split_masks(seq_dates, cfg).items():
+                count = int(mask.sum())
+                if not count:
+                    continue
+                start, stop = offsets[split_name], offsets[split_name] + count
+                normalized = (X_sym[mask] - feat_mean) / feat_std
+                arrays[f"X_{split_name}"][start:stop] = normalized.astype(
+                    np.float32, copy=False
+                )
+                arrays[f"y_{split_name}"][start:stop] = y_sym[mask]
+                offsets[split_name] = stop
+            if index % 50 == 0:
+                print(
+                    f"Disk write pass: {index:,}/{len(eligible_symbols):,} symbols | "
+                    f"train rows={offsets['train']:,}"
+                )
+
+        if offsets != split_counts:
+            raise RuntimeError(
+                f"Disk write counts differ from pass 1: wrote={offsets}, expected={split_counts}"
+            )
+        for array in arrays.values():
+            array.flush()
+        arrays.clear()
+
+        manifest = {
+            "format": "memmap_v1",
+            "feature_cols": feature_cols,
+            "lookback_days": lookback,
+            "n_features": n_features,
+            "n_symbols": len(eligible_symbols),
+            "splits": {
+                split: {
+                    "X": f"X_{split}.npy",
+                    "y": f"y_{split}.npy",
+                    "shape": [split_counts[split], lookback, n_features],
+                    "dtype": "float32",
+                }
+                for split in offsets
+            },
+        }
+        (staging / "manifest.json").write_text(json.dumps(manifest, indent=2))
+        (staging / "pipeline_config.json").write_text(json.dumps(export_cfg, indent=2))
+        (staging / "scaler.json").write_text(json.dumps(scaler, indent=2))
+
+        backup_dir = paths["sequences_dir"].with_name(paths["sequences_dir"].name + ".previous")
+        if backup_dir.exists():
+            shutil.rmtree(backup_dir)
+        if paths["sequences_dir"].exists():
+            os.replace(paths["sequences_dir"], backup_dir)
+        os.replace(staging, paths["sequences_dir"])
+        if backup_dir.exists():
+            shutil.rmtree(backup_dir)
+
+        # Publish compatibility metadata only after the self-contained bundle is complete.
+        config_tmp = paths["config"].with_suffix(paths["config"].suffix + ".tmp")
+        scaler_tmp = paths["scaler"].with_suffix(paths["scaler"].suffix + ".tmp")
+        config_tmp.write_text(json.dumps(export_cfg, indent=2))
+        scaler_tmp.write_text(json.dumps(scaler, indent=2))
+        os.replace(config_tmp, paths["config"])
+        os.replace(scaler_tmp, paths["scaler"])
+        os.replace(paths["sequences_dir"] / "model_frame.csv", paths["model_frame"])
+
+        # A stale monolithic NPZ must never shadow the verified disk-backed bundle.
+        if paths["sequences"].exists():
+            stale = paths["sequences"].with_suffix(".stale.npz")
+            if stale.exists():
+                stale.unlink()
+            os.replace(paths["sequences"], stale)
+    except BaseException:
+        arrays.clear()
+        if staging.exists():
+            shutil.rmtree(staging, ignore_errors=True)
+        raise
+
+    persistence_mae = (
+        persistence_sum / persistence_count if persistence_count else float("nan")
+    )
+    print(f"\n=== Disk-backed profile: {cfg.get('profile', 'full')} ===")
+    print(f"Symbols used: {len(eligible_symbols):,}")
+    print(f"Model frame rows: {frame_rows:,} | dates: {date_min.date()} → {date_max.date()}")
+    for split_name in ("train", "val", "test"):
+        target_mean = split_target_sums[split_name] / split_counts[split_name]
+        print(
+            f"  {split_name:5s}: n={split_counts[split_name]:,} "
+            f"target_mean={target_mean:.6f}"
+        )
+    print(f"Exported disk-backed bundle: {paths['sequences_dir']}")
+    return {
+        "cfg": export_cfg,
+        "feature_cols": feature_cols,
+        "paths": paths,
+        "manifest_dir": paths["sequences_dir"],
+        "persistence_mae": persistence_mae,
+    }
+
+
+def validate_disk_backed_result(result: dict, chunk_rows: int = 8192) -> None:
+    """Validate a memmap bundle incrementally, without loading a split into RAM."""
+    bundle_dir = result["manifest_dir"]
+    manifest = json.loads((bundle_dir / "manifest.json").read_text())
+    cfg = result["cfg"]
+    checks = {
+        "format_is_memmap_v1": manifest.get("format") == "memmap_v1",
+        "symbol_count_matches": manifest.get("n_symbols") == cfg.get("n_symbols"),
+        "lookback_matches_config": manifest.get("lookback_days") == cfg["lookback_days"],
+        "n_features_matches_config": manifest.get("n_features")
+        == len(result["feature_cols"]),
+    }
+    unique_targets: set[float] = set()
+    max_train_target = -np.inf
+    for split_name, spec in manifest["splits"].items():
+        X = np.load(bundle_dir / spec["X"], mmap_mode="r")
+        y = np.load(bundle_dir / spec["y"], mmap_mode="r")
+        checks[f"{split_name}_samples > 0"] = len(y) > 0
+        checks[f"{split_name}_shape_matches"] = list(X.shape) == spec["shape"]
+        finite = True
+        for start in range(0, len(y), chunk_rows):
+            stop = min(start + chunk_rows, len(y))
+            if not np.isfinite(X[start:stop]).all() or not np.isfinite(y[start:stop]).all():
+                finite = False
+                break
+            if split_name == "train":
+                unique_targets.update(np.unique(y[start:stop]).astype(float).tolist())
+                max_train_target = max(max_train_target, float(np.max(y[start:stop])))
+        checks[f"{split_name}_finite"] = finite
+
+    if cfg["target_type"] == "abs_return":
+        checks["y_is_continuous"] = max_train_target > 0.05 and len(unique_targets) > 10
+    elif cfg["target_type"] == "vol_regime_21":
+        checks["y_is_binary"] = unique_targets.issubset({0.0, 1.0})
+        checks["regime_threshold_documented"] = "regime_threshold" in cfg
+    elif cfg["target_type"] == "vol_regime3_21":
+        checks["y_is_ternary"] = unique_targets.issubset({0.0, 1.0, 2.0})
+        checks["regime3_thresholds_documented"] = "regime3" in cfg
+
+    failed = [name for name, ok in checks.items() if not ok]
+    if failed:
+        raise RuntimeError(f"Disk-backed pipeline validation failed: {failed}")
+    print("All disk-backed pipeline checks passed.")
+
+
 def validate_pipeline_result(result: dict) -> None:
     cfg = result["cfg"]
     feature_cols = result["feature_cols"]
@@ -683,6 +1154,15 @@ def main() -> int:
         default=None,
         help="Override configured symbols_v1 (e.g. SPY for market lane)",
     )
+    parser.add_argument(
+        "--storage-format",
+        choices=["auto", "npz", "memmap"],
+        default="auto",
+        help=(
+            "Sequence storage. auto uses memmap for uncapped all-universe runs "
+            "and compressed NPZ for configured/dev runs."
+        ),
+    )
     args = parser.parse_args()
 
     project_root = find_project_root()
@@ -720,17 +1200,33 @@ def main() -> int:
     print(f"Eligible symbols (pre-filter): {len(eligible_symbols)}")
 
     strict_filters = symbol_scope == "configured"
-    cleaned_frames, _metrics = load_and_clean_symbols(
-        base_cfg,
-        eligible_symbols,
-        stocks_dir,
-        etfs_dir,
-        strict=strict_filters,
+    use_memmap = args.storage_format == "memmap" or (
+        args.storage_format == "auto"
+        and symbol_scope == "all"
+        and args.max_symbols is None
     )
-    cleaned_frames, outlier_info = filter_history_outliers(
-        cleaned_frames, method=args.history_outlier_filter
-    )
-    eligible_symbols = [s for s in eligible_symbols if s in cleaned_frames]
+    if use_memmap:
+        eligible_symbols, outlier_info = scan_quality_symbols(
+            base_cfg,
+            eligible_symbols,
+            stocks_dir,
+            etfs_dir,
+            strict=strict_filters,
+            history_outlier_filter=args.history_outlier_filter,
+        )
+        cleaned_frames = None
+    else:
+        cleaned_frames, _metrics = load_and_clean_symbols(
+            base_cfg,
+            eligible_symbols,
+            stocks_dir,
+            etfs_dir,
+            strict=strict_filters,
+        )
+        cleaned_frames, outlier_info = filter_history_outliers(
+            cleaned_frames, method=args.history_outlier_filter
+        )
+        eligible_symbols = [s for s in eligible_symbols if s in cleaned_frames]
     with open(eligible_path, "w") as f:
         json.dump(eligible_symbols, f, indent=2)
     print(f"Eligible symbols (final): {len(eligible_symbols)}")
@@ -752,15 +1248,26 @@ def main() -> int:
         }
         if args.symbols_v1:
             cfg["symbols_v1"] = args.symbols_v1
-        result = run_pipeline(
-            cfg,
-            cleaned_frames,
-            eligible_symbols,
-            processed_dir,
-            stocks_dir,
-            etfs_dir,
-        )
-        validate_pipeline_result(result)
+        if use_memmap:
+            result = run_pipeline_disk_backed(
+                cfg,
+                eligible_symbols,
+                processed_dir,
+                stocks_dir,
+                etfs_dir,
+            )
+            validate_disk_backed_result(result)
+        else:
+            assert cleaned_frames is not None
+            result = run_pipeline(
+                cfg,
+                cleaned_frames,
+                eligible_symbols,
+                processed_dir,
+                stocks_dir,
+                etfs_dir,
+            )
+            validate_pipeline_result(result)
     return 0
 
 

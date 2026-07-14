@@ -67,5 +67,43 @@ Example (stocks, plus5 profile, dev200):
 python scripts/run_preprocessing.py \
   --asset-type stock \
   --profile plus5 \
-  --dev-symbols 200
+  --symbol-scope all \
+  --max-symbols 200
 ```
+
+## Full-universe storage policy
+
+Full-universe preprocessing is always disk-backed. The previous monolithic NPZ
+pipeline exceeded the 47 GiB WSL limit while concatenating 1,838 symbols and was
+terminated by the Linux OOM killer.
+
+```bash
+python scripts/run_preprocessing.py \
+  --asset-type stock \
+  --profile plus5 \
+  --symbol-scope all \
+  --target-type abs_return \
+  --storage-format memmap
+```
+
+`--storage-format auto` (the default) selects the same memory-safe format for
+uncapped `--symbol-scope all` runs. It writes:
+
+```text
+data/processed/stocks_universe_sequences_plus5/
+├── manifest.json
+├── X_train.npy / y_train.npy
+├── X_val.npy / y_val.npy
+├── X_test.npy / y_test.npy
+├── pipeline_config.json
+└── scaler.json
+```
+
+The `.npy` splits are opened read-only with NumPy memory mapping and fed to
+TensorFlow in shuffled blocks. Existing dev200 `.npz` bundles remain supported.
+Artifacts are built in a staging directory and atomically published only after
+all rows are written; interrupted runs cannot masquerade as complete bundles.
+
+Before full training, verify `manifest.json` and the paired pipeline config have
+the expected symbol count and split sizes. A `full` filename alone is not proof
+that the entire universe was processed.

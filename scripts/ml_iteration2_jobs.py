@@ -35,6 +35,7 @@ ARCHITECTURE_LABELS: dict[str, str] = {
 JOB_TASK_KIND: dict[str, str] = {
     "vol_risk": "regression",
     "vol_regime": "classification",
+    "vol_regime3": "classification",
     "rel_strength": "regression",
     "etf_opportunity": "regression",
 }
@@ -42,9 +43,20 @@ JOB_TASK_KIND: dict[str, str] = {
 JOB_PRIMARY_METRIC: dict[str, str] = {
     "vol_risk": "val_mae",
     "vol_regime": "macro_f1",
+    "vol_regime3": "macro_f1",
     "rel_strength": "val_mae",
     "etf_opportunity": "val_mae",
 }
+
+JOB_N_CLASSES: dict[str, int] = {"vol_regime3": 3}
+JOB_CLASS_LABELS: dict[str, list[str]] = {
+    "vol_regime": ["low vol", "high vol"],
+    "vol_regime3": ["bull", "bear", "crisis"],
+}
+
+
+def job_n_classes(job_slug: str) -> int:
+    return JOB_N_CLASSES.get(job_slug, 2)
 
 
 @dataclass(frozen=True)
@@ -181,6 +193,18 @@ def all_notebook_specs() -> list[NotebookSpec]:
         "P3",
         "active",
         "vol_regime_21",
+        "macro_f1",
+    )
+    add_job(
+        "02v2",
+        "vol_regime3",
+        "3-Class Vol Regime (bull/bear/crisis)",
+        "02",
+        ["stocks", "etfs", "market"],
+        {"stocks": "stock", "etfs": "etf", "market": "etf"},
+        "P3",
+        "active",
+        "vol_regime3_21",
         "macro_f1",
     )
     add_job(

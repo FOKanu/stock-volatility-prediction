@@ -21,7 +21,7 @@ from ml_iteration2_jobs import JOB_TASK_KIND, ML_DIR, ROOT
 
 NOTEBOOK_RE = re.compile(
     r"^(?:(?P<baseline>00a_baseline)|(?P<num>\d{2})(?P<letter>[a-f])_(?P<arch>gru|tcn|lstm|cnn1d|xgb|garchgru))_"
-    r"(?P<job_slug>vol_risk|vol_regime|rel_strength|etf_opportunity)_"
+    r"(?P<job_slug>vol_risk|vol_regime3|vol_regime|rel_strength|etf_opportunity)_"
     r"(?P<universe>stocks|etfs|market)$"
 )
 
