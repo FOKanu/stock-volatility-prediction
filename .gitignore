@@ -39,6 +39,15 @@ data/models/vol_gru_stocks_universe_plus5_*
 data/models/.backup_*
 data/models/*_epoch*.keras
 
+# Full-universe conformal bands (~11 MB+ each) — regenerate via 00b.
+# Keep lightweight metrics in champions.json / SESSION_HANDOFF.md.
+# Dev200 conformal (*_dev200_tf_conformal.json) remains tracked.
+data/models/*_tf_conformal.json
+!data/models/*_dev200_tf_conformal.json
+
+# Regenerable Word export of the project report (markdown is source of truth)
+docs/*.docx
+
 # Scratch
 untitled.chat
 *.chat

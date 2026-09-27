@@ -1,0 +1,74 @@
+{
+  "job_id": "02v2",
+  "job_slug": "vol_regime3",
+  "dataset_tag": "dev200",
+  "status": "complete",
+  "target_type": "vol_regime3_21",
+  "primary_metric": "macro_f1",
+  "baseline": {
+    "stocks": {
+      "notebook": "J02v2_vol_regime3/stocks/00a_baseline_vol_regime3_stocks.ipynb",
+      "predictions_json": "baseline_vol_regime3_stocks_dev200_tf_predictions.json",
+      "val_macro_f1": 0.4291739280300774,
+      "crisis_macro_f1": 0.35856617434937726,
+      "trained_at": "2026-07-10T13:59:38.422517+00:00"
+    },
+    "etfs": {
+      "notebook": "J02v2_vol_regime3/etfs/00a_baseline_vol_regime3_etfs.ipynb",
+      "predictions_json": "baseline_vol_regime3_etfs_dev200_tf_predictions.json",
+      "val_macro_f1": 0.42357400718228577,
+      "crisis_macro_f1": 0.3894964505300294,
+      "trained_at": "2026-07-10T13:50:58.450287+00:00"
+    },
+    "market": {
+      "notebook": "J02v2_vol_regime3/market/00a_baseline_vol_regime3_market.ipynb",
+      "predictions_json": "baseline_vol_regime3_market_dev200_tf_predictions.json",
+      "val_macro_f1": 0.36073492757984743,
+      "crisis_macro_f1": 0.26379006264063737,
+      "trained_at": "2026-07-10T13:49:08.395892+00:00"
+    }
+  },
+  "champions": {
+    "stocks": {
+      "architecture": "lstm",
+      "notebook": "J02v2_vol_regime3/stocks/02c_lstm_vol_regime3_stocks.ipynb",
+      "predictions_json": "lstm_vol_regime3_stocks_dev200_tf_predictions.json",
+      "val_macro_f1": 0.46050914281371697,
+      "crisis_macro_f1": 0.3897316869398683,
+      "beats_baseline_val": true,
+      "beats_baseline_crisis": true,
+      "selected_at": "2026-07-14T14:20:00+00:00",
+      "trained_at": "2026-07-10T14:17:38.916951+00:00",
+      "notes": "Only lstm and xgb beat baseline on both val and crisis; lstm wins on both metrics (val +0.0313, crisis +0.0311 vs baseline). gru has best val among non-lstm but loses crisis (0.3499)."
+    },
+    "etfs": {
+      "architecture": "gru",
+      "notebook": "J02v2_vol_regime3/etfs/02a_gru_vol_regime3_etfs.ipynb",
+      "predictions_json": "gru_vol_regime3_etfs_dev200_tf_predictions.json",
+      "val_macro_f1": 0.49392459345867445,
+      "crisis_macro_f1": 0.3956937945830621,
+      "beats_baseline_val": true,
+      "beats_baseline_crisis": true,
+      "selected_at": "2026-07-14T14:20:00+00:00",
+      "trained_at": "2026-07-10T13:52:38.626044+00:00",
+      "notes": "Only candidate beating baseline on both val (+0.0703) and crisis (+0.0062). Best val macro-F1 across all etfs candidates."
+    },
+    "market": {
+      "architecture": "lstm",
+      "notebook": "J02v2_vol_regime3/market/02c_lstm_vol_regime3_market.ipynb",
+      "predictions_json": "lstm_vol_regime3_market_dev200_tf_predictions.json",
+      "val_macro_f1": 0.4971268029210008,
+      "crisis_macro_f1": 0.2121951219512195,
+      "beats_baseline_val": true,
+      "beats_baseline_crisis": false,
+      "selected_at": "2026-07-14T14:20:00+00:00",
+      "trained_at": "2026-07-10T13:50:16.112848+00:00",
+      "notes": "Best val macro-F1 (+0.1364 vs baseline) but crisis macro-F1 trails baseline (0.2122 vs 0.2638). SPY-only lane; neural models under-predict crisis class in COVID window. Selected on rubric priority 1+2 (beats baseline val, highest val F1)."
+    }
+  },
+  "selection_rubric": [
+    "beats_baseline_val_macro_f1",
+    "val_macro_f1",
+    "crisis_macro_f1"
+  ]
+}
