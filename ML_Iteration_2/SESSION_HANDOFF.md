@@ -50,13 +50,47 @@ does not overwrite Huber artifacts). Targets lower crisis under-prediction rate
 (Huber full run: 49.9% vs baseline 44.5%). Dev200 QLIKE GARCH-GRU cut crisis
 under-rate 53%→36% at ~30% MAE cost.
 
+## Update 2026-07-14 — QLIKE full run + conformal on full universe
+
+QLIKE GARCH-GRU full-universe training completed (gracefully stopped epoch 18,
+plateau). Huber full artifacts restored from epoch-012 checkpoint.
+
+| Model | Val MAE | Crisis MAE | Val AUC@90 | Crisis AUC@90 | Under-rate |
+|---|---|---|---|---|---|
+| Ridge baseline (full) | 0.01427 | **0.02591** | 0.775 | **0.841** | 44.5% |
+| GARCH-GRU Huber (full) | **0.01356** | 0.02603 | **0.807** | 0.793 | 48.6% |
+| GARCH-GRU QLIKE (full) | 0.01364 | 0.02603 | **0.808** | 0.795 | **47.5%** |
+
+**Verdict:** QLIKE improves crisis under-prediction vs Huber (−1.1 pp) at +0.5%
+val MAE cost; both still lose to full baseline on crisis MAE. **`promotion_eligible:
+false`**. Dev200 GARCH-GRU Huber remains champion.
+
+**Conformal (90% target, Q1-2020 COVID test):**
+
+| Model | Empirical coverage | Coverage gap | Undercoverage rate |
+|---|---|---|---|
+| Full baseline | 0.736 | 0.164 | 0.140 |
+| Full GARCH-GRU Huber | 0.736 | 0.164 | 0.163 |
+| Full GARCH-GRU QLIKE | 0.731 | 0.169 | 0.156 |
+
+Artifacts: `garchgru_qlike_vol_risk_stocks_tf_predictions.json`,
+`*_conformal.json` for all three full-universe models. Audit canvases:
+`canvases/j01-qlike-full-performance-audit.canvas.tsx`,
+`canvases/j01-full-universe-bakeoff-comparison.canvas.tsx` (updated with QLIKE).
+
+**J02v2 champions committed:** `J02v2_vol_regime3/champions.json` — stocks=lstm,
+etfs=gru, market=lstm (best val; crisis trails baseline on market lane).
+
+**Next:** Product orchestration (`00a_ensemble_product_scores.ipynb`); dev200 tail
+experiments (quantile head / multi-task GARCH-GRU); fix replay/compare full-tag paths.
+
 ## Update 2026-07-10 — J02 bake-offs complete
 
 - Binary champions: stocks=lstm (val 0.8022/crisis 0.6596), etfs=gru
   (0.7367/0.5878), market=baseline (0.6597/0.3091).
-- Three-class balanced-weight champions in `J02v2_vol_regime3/champions.json`:
+- Three-class balanced-weight champions in `J02v2_vol_regime3/champions.json` (committed 2026-07-14):
   stocks=lstm (0.4605/0.3897), etfs=gru (0.4939/0.3957), market=lstm
-  (0.4971/0.2122; all market neural candidates predicted zero COVID crisis days).
+  (0.4971/0.2122; all market neural candidates predicted zero COVID crisis days in early runs).
 
 ## What was implemented (all merged, all tested)
 
@@ -112,10 +146,12 @@ Train class rates 61/29/10 (bull/bear/crisis); COVID test = 55% crisis days. Unw
 
 ## Next steps (agreed order)
 
-1. **J02 binary bake-off** (user's active job) — run `00a` then `02a–02e` for market/stocks/etfs, pick champions (`macro_f1` rubric). Untouched by this session.
-2. **J02-v2 3-class bake-off** — build pooled stocks/etfs `vol_regime3_21` bundles (`run_preprocessing.py --target-type vol_regime3_21`), add class weights to `_compile_classifier`/fit, scaffold + train.
-3. Optional: full-universe re-run of stocks champion (`01f`, `RUN_MODE="full"`, drop patience to 8).
-4. Orchestration (`00a_ensemble_product_scores.ipynb` still scaffold): merge champion scores + conformal bands + MMD health check into product outputs.
+1. **Product orchestration** — `00a_ensemble_product_scores.ipynb`: merge champion scores + conformal bands + MMD health check.
+2. **Dev200 tail experiments** — quantile head or multi-task GARCH-GRU on `01f`; J01+J02 ensemble on dev200.
+3. **Fix tooling** — `replay_notebook_outputs.py` / `compare_job_models.py` full-tag path mismatch.
+4. Optional: full-universe ETFs lane (baseline + GARCH-GRU).
+
+~~Completed since prior handoff: QLIKE full run, conformal on full predictions, J02v2 champions.json, bake-off canvases.~~
 
 ## Research backlog (not scheduled)
 
