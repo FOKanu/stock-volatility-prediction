@@ -2,7 +2,7 @@
   "job_id": "01",
   "job_slug": "vol_risk",
   "dataset_tag": "dev200",
-  "status": "full_bakeoff_partial",
+  "status": "full_bakeoff_complete",
   "baseline": {
     "stocks": {
       "dev200": {
@@ -15,11 +15,15 @@
       "full": {
         "notebook": "J01_vol_risk/stocks/00a_baseline_vol_risk_stocks.ipynb",
         "predictions_json": "baseline_vol_risk_stocks_tf_predictions.json",
+        "conformal_json": "baseline_vol_risk_stocks_tf_conformal.json",
         "n_symbols": 1838,
-        "val_mae": 0.014269806146621704,
-        "crisis_mae": 0.025907516479492188,
+        "val_mae": 0.014269519597291946,
+        "crisis_mae": 0.02590835466980934,
         "val_top10_vol_auc": 0.774872,
         "crisis_top10_vol_auc": 0.840552,
+        "crisis_under_rate": 0.4455,
+        "conformal_covid_coverage": 0.736,
+        "conformal_coverage_gap": 0.164,
         "trained_at": "2026-07-11T23:51:15.890431+00:00"
       }
     },
@@ -33,39 +37,83 @@
   },
   "full_universe_bakeoff": {
     "stocks": {
-      "status": "garchgru_vs_baseline_complete",
+      "status": "baseline_vs_huber_vs_qlike_complete",
       "n_symbols": 1838,
-      "compared_at": "2026-07-12T00:00:00+00:00",
+      "compared_at": "2026-07-14T14:20:00+00:00",
       "candidates": {
-        "garchgru": {
+        "garchgru_huber": {
+          "loss": "huber",
           "predictions_json": "garchgru_vol_risk_stocks_tf_predictions.json",
-          "val_mae": 0.013527,
-          "crisis_mae": 0.026107,
-          "val_top10_vol_auc": 0.807427,
-          "crisis_top10_vol_auc": 0.790045,
+          "conformal_json": "garchgru_vol_risk_stocks_tf_conformal.json",
+          "val_mae": 0.013564318418502808,
+          "crisis_mae": 0.026027295738458633,
+          "val_top10_vol_auc": 0.80739,
+          "crisis_top10_vol_auc": 0.792991,
+          "crisis_under_rate": 0.4858,
+          "conformal_covid_coverage": 0.736,
+          "conformal_coverage_gap": 0.164,
           "best_epoch": 12,
-          "trained_at": "2026-07-11T23:35:51.321548+00:00"
+          "trained_at": "2026-07-12T19:23:11.819816+00:00",
+          "notes": "Restored from epoch-012 checkpoint after graceful-stop artifact recovery."
+        },
+        "garchgru_qlike": {
+          "loss": "qlike",
+          "predictions_json": "garchgru_qlike_vol_risk_stocks_tf_predictions.json",
+          "conformal_json": "garchgru_qlike_vol_risk_stocks_tf_conformal.json",
+          "val_mae": 0.013635228388011456,
+          "crisis_mae": 0.026025569066405296,
+          "val_top10_vol_auc": 0.807649,
+          "crisis_top10_vol_auc": 0.794919,
+          "crisis_under_rate": 0.4748,
+          "conformal_covid_coverage": 0.731,
+          "conformal_coverage_gap": 0.169,
+          "best_epoch": 18,
+          "trained_at": "2026-07-12T19:20:19.936125+00:00",
+          "notes": "Gracefully stopped at epoch 18 (plateau). Improves crisis under-rate vs Huber (−1.1 pp) at +0.5% val MAE cost."
         },
         "baseline": {
           "predictions_json": "baseline_vol_risk_stocks_tf_predictions.json",
-          "val_mae": 0.014269806146621704,
-          "crisis_mae": 0.025907516479492188,
+          "conformal_json": "baseline_vol_risk_stocks_tf_conformal.json",
+          "val_mae": 0.014269519597291946,
+          "crisis_mae": 0.02590835466980934,
           "val_top10_vol_auc": 0.774872,
           "crisis_top10_vol_auc": 0.840552,
+          "crisis_under_rate": 0.4455,
+          "conformal_covid_coverage": 0.736,
+          "conformal_coverage_gap": 0.164,
           "best_epoch": 1,
           "trained_at": "2026-07-11T23:51:15.890431+00:00"
         }
       },
-      "delta_garchgru_vs_baseline": {
-        "val_mae": -0.000742,
-        "crisis_mae": 0.000199,
-        "val_top10_vol_auc": 0.032555,
-        "crisis_top10_vol_auc": -0.050507
+      "delta_huber_vs_baseline": {
+        "val_mae": -0.000705,
+        "crisis_mae": 0.000119,
+        "val_top10_vol_auc": 0.032518,
+        "crisis_top10_vol_auc": -0.047561,
+        "crisis_under_rate_pp": 4.03
       },
-      "beats_baseline_val_mae": true,
-      "beats_baseline_crisis_mae": false,
+      "delta_qlike_vs_baseline": {
+        "val_mae": -0.000634,
+        "crisis_mae": 0.000117,
+        "val_top10_vol_auc": 0.032777,
+        "crisis_top10_vol_auc": -0.045633,
+        "crisis_under_rate_pp": 2.93
+      },
+      "delta_qlike_vs_huber": {
+        "val_mae": 0.000071,
+        "crisis_mae": -0.000002,
+        "crisis_under_rate_pp": -1.1
+      },
+      "beats_baseline_val_mae": {
+        "huber": true,
+        "qlike": true
+      },
+      "beats_baseline_crisis_mae": {
+        "huber": false,
+        "qlike": false
+      },
       "promotion_eligible": false,
-      "verdict": "GARCH-GRU wins val MAE and val AUC but loses crisis MAE and crisis AUC. No full-universe champion promotion per rubric."
+      "verdict": "Huber and QLIKE both beat full baseline on val MAE but lose on crisis MAE and crisis AUC@90. QLIKE reduces under-prediction vs Huber without closing the baseline crisis gap. No full-universe champion promotion."
     }
   },
   "champions": {
@@ -79,7 +127,7 @@
       "beats_baseline_val": true,
       "beats_baseline_crisis": true,
       "selected_at": "2026-07-10T00:45:00+00:00",
-      "notes": "Dev200 champion. Full-universe GARCH-GRU (2026-07-11) beats full baseline on val MAE but loses crisis MAE (0.02611 vs 0.02591); promotion withheld. Previous champion: xgb (selected 2026-07-01)."
+      "notes": "Dev200 champion retained. Full-universe Huber and QLIKE (2026-07-12) beat full baseline on val MAE but lose crisis MAE (0.02603 vs 0.02591); promotion withheld. QLIKE full run saved as parallel artifact stem garchgru_qlike_*."
     },
     "etfs": {
       "architecture": "xgb",
