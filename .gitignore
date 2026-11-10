@@ -48,6 +48,18 @@ data/models/*_tf_conformal.json
 # Regenerable Word export of the project report (markdown is source of truth)
 docs/*.docx
 
+# Generated model artifacts — never commit. Regenerate with the training
+# notebooks / scripts (see README "Reproducing results"). Lightweight metrics
+# live in ML_Iteration_2/J*/champions.json, which stays tracked.
+data/models/*.json
+data/models/*.keras
+data/models/*.joblib
+!data/models/.gitkeep
+data/processed/*.npz
+data/processed/*.csv
+!data/processed/eligible_symbols.json
+!data/processed/pipeline_config*.json
+
 # Scratch
 untitled.chat
 *.chat

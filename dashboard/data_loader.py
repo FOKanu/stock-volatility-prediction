@@ -29,6 +29,7 @@ from ml_iteration2_jobs import (  # noqa: E402
 JOB_TITLES = {
     "vol_risk": "J01 · Vol / Risk Regression",
     "vol_regime": "J02 · Vol Regime Classification",
+    "vol_regime3": "J02v2 · Vol Regime (3-Class)",
     "rel_strength": "J03 · Relative Strength vs SPY",
     "etf_opportunity": "J04 · ETF Opportunity Ranker",
 }
@@ -36,15 +37,16 @@ JOB_TITLES = {
 JOB_TARGETS = {
     "vol_risk": "Next-day |log return|",
     "vol_regime": "21-day high-volatility regime (binary)",
+    "vol_regime3": "21-day volatility regime (bull / bear / crisis)",
     "rel_strength": "21-day excess return vs SPY",
     "etf_opportunity": "21-day ETF excess return vs SPY",
 }
 
-ARCH_ORDER = ["baseline", "gru", "tcn", "lstm", "cnn1d", "xgb"]
+ARCH_ORDER = ["baseline", "gru", "garchgru", "tcn", "lstm", "cnn1d", "xgb"]
 
 ARTIFACT_RE = re.compile(
-    r"^(?P<arch>baseline|gru|tcn|lstm|cnn1d|xgb)_"
-    r"(?P<job_slug>vol_risk|vol_regime|rel_strength|etf_opportunity)_"
+    r"^(?P<arch>baseline|gru|garchgru|tcn|lstm|cnn1d|xgb)_"
+    r"(?P<job_slug>vol_risk|vol_regime3|vol_regime|rel_strength|etf_opportunity)_"
     r"(?P<universe>stocks|etfs|market)_"
     r"(?P<dataset_tag>[a-z0-9]+)_tf_predictions\.json$"
 )
@@ -94,7 +96,7 @@ def predictions_for(path: Path | str) -> dict:
 @st.cache_data(show_spinner=False)
 def load_champions() -> dict:
     out = {}
-    for path in sorted(ML_DIR.glob("J*_*/champions.json")):
+    for path in sorted(ML_DIR.glob("J*/champions.json")):
         with open(path) as f:
             data = json.load(f)
         out[data["job_slug"]] = data

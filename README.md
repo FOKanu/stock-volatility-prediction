@@ -21,7 +21,7 @@ bash scripts/install-jupyter-kernel.sh
 jupyter lab ML_Iteration_2/J01_vol_risk/stocks/00a_baseline_vol_risk_stocks.ipynb
 ```
 
-**No raw dataset required** for dev200 training: processed sequences and model checkpoints are included in the repo. See [docs/DATASET.md](docs/DATASET.md) if you need to rebuild preprocessing or run the full universe.
+**Artifacts are not committed.** Prediction JSONs, processed sequences (`.npz`), and model checkpoints (`.keras`/`.joblib`) are git-ignored build outputs — regenerate them with `scripts/run_preprocessing.py` followed by the training notebooks under `ML_Iteration_2/` (see [docs/DATASET.md](docs/DATASET.md)). Headline results are recorded in the kept `ML_Iteration_2/J*/champions.json` files.
 
 ---
 
