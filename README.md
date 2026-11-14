@@ -1,239 +1,92 @@
 # Stock Volatility Prediction
 
-Machine-learning pipeline for **next-day volatility**, **risk regimes**, and **relative opportunity** across a pooled stock and ETF universe. Built for WSL2/Linux with TensorFlow GPU support (tested on RTX 5090).
+Machine-learning bake-offs for **next-day volatility risk** and **21-day volatility regimes** across a pooled stock & ETF universe — validated on 2018–19 and stress-tested on the COVID-19 crash of 2020 Q1.
 
-Originally a BIT4.2C analytics project (RNN direction prediction); the active workstream is **ML Iteration 2**, oriented toward a novice-investor product that emphasizes risk control and benchmark-relative selection—not daily stock picking.
+Instead of predicting price direction (mostly noise), this project predicts *risk*: how turbulent tomorrow is likely to be, and which volatility regime a symbol is in. Every candidate model is compared against a trainable baseline and naive persistence, and a champion is only selected if it beats the baseline on **both** validation and the COVID stress window.
 
----
+![Python](https://img.shields.io/badge/Python-3.12-blue) ![TensorFlow](https://img.shields.io/badge/TensorFlow-Keras-orange) ![Streamlit](https://img.shields.io/badge/Dashboard-Streamlit-red) ![License](https://img.shields.io/badge/License-MIT-green)
 
-## Quick start (new machine)
+## Results (dev200 universe, recorded in `ML_Iteration_2/J*/champions.json`)
+
+| Job | Target | Universe | Champion | Val | Baseline val | COVID crisis |
+|---|---|---|---|---|---|---|
+| J01 · vol_risk | Next-day \|log return\| (regression, MAE ↓) | Stocks | GARCH-GRU hybrid | **0.01457** | 0.01547 | 0.02679 |
+| J01 · vol_risk | Next-day \|log return\| (regression, MAE ↓) | ETFs | XGBoost | **0.00425** | 0.00548 | 0.01350 |
+| J02 · vol_regime | 21-day high-vol regime (binary, macro-F1 ↑) | Stocks | LSTM | **0.8022** | 0.7587 | 0.6596 |
+| J02 · vol_regime | 21-day high-vol regime (binary, macro-F1 ↑) | ETFs | GRU | **0.7367** | — | 0.5878 |
+| J02v2 · vol_regime3 | 21-day regime, 3-class bull/bear/crisis (macro-F1 ↑) | Stocks | LSTM | **0.4605** | 0.4292 | 0.3897 |
+| J02v2 · vol_regime3 | 21-day regime, 3-class bull/bear/crisis (macro-F1 ↑) | ETFs | GRU | **0.4939** | 0.4236 | 0.3957 |
+
+Full per-model results, training timestamps, and selection notes live in the three `champions.json` files — they are the single source of truth for these numbers.
+
+## What this demonstrates
+
+- **Evaluation discipline:** baselines and persistence are first-class citizens; champions must win on validation *and* an out-of-sample crisis window. On the J02 ETF lane the baseline was highly competitive and GRU's margin was thin (+0.0042 val) — recorded as such, not rounded into a victory.
+- **Honest negative results:** a full-universe GARCH-GRU trained with a QLIKE loss beat the full baseline on validation MAE but *lost* on crisis MAE (0.02603 vs 0.02591) — so promotion was withheld. That decision is documented in `J01_vol_risk/champions.json`.
+- **Custom modelling:** a GARCH(1,1)-GRU hybrid cell (`GarchGruCell`) that embeds a conditional-variance recursion inside the recurrent cell, plus QLIKE loss variants for volatility regression.
+- **Uncertainty & monitoring:** SPCI conformal risk bands (`scripts/conformal.py`) and RBF-MMD drift monitoring (`scripts/drift_monitor.py`) around the champions.
+- **Data engineering:** disk-backed, streaming preprocessing (Welford running moments, sequence bundles written to `.npz`) so the full universe never needs to fit in RAM (`scripts/run_preprocessing.py`, `tests/test_disk_backed_pipeline.py`).
+- **Product framing:** separate models per job (risk engine, regime gate, opportunity ranker) rather than one mega-network — designed for a novice-investor product that favours risk control over stock-picking.
+
+## Approach
+
+```text
+Shared preprocessing (scripts/run_preprocessing.py)
+    │
+    ├── J01 vol_risk        → next-day |log return|     [complete]
+    ├── J02 vol_regime      → 21d vol regime (binary)   [complete]
+    ├── J02v2 vol_regime3   → 21d regime (3-class)      [complete]
+    ├── J03 rel_strength    → 21d excess vs SPY         [scaffold]
+    ├── J04 etf_opportunity → ETF excess vs SPY         [scaffold]
+    └── 00 orchestration    → conformal bands, drift, champion merge
+```
+
+Each job runs one trainable baseline plus candidate architectures (GRU, GARCH-GRU, TCN, LSTM, CNN-1D, XGBoost) per universe (stocks / ETFs / market), exports prediction artifacts, and records its champion in `champions.json`.
+
+## Quick start
+
+Training was developed on WSL2/Linux with a TensorFlow GPU environment (Python 3.12).
 
 ```bash
-git clone https://github.com/FOKanu/Stock-Volitility-Prediction.git
-cd Stock-Volitility-Prediction
+git clone https://github.com/FOKanu/stock-volatility-prediction.git
+cd stock-volatility-prediction
 
-# Python 3.12 + TensorFlow GPU (WSL/Linux)
 bash scripts/setup-wsl-venv.sh
 source .venv/bin/activate
 bash scripts/install-jupyter-kernel.sh
-
-# Open a notebook — kernel: Python (stock-prediction)
-jupyter lab ML_Iteration_2/J01_vol_risk/stocks/00a_baseline_vol_risk_stocks.ipynb
 ```
 
-**Artifacts are not committed.** Prediction JSONs, processed sequences (`.npz`), and model checkpoints (`.keras`/`.joblib`) are git-ignored build outputs — regenerate them with `scripts/run_preprocessing.py` followed by the training notebooks under `ML_Iteration_2/` (see [docs/DATASET.md](docs/DATASET.md)). Headline results are recorded in the kept `ML_Iteration_2/J*/champions.json` files.
-
----
-
-## Goals
-
-### Product (long-term)
-
-Help novice investors **avoid blowing up** and **make calmer allocation decisions**, not day-trade on noisy signals.
-
-| Layer | Purpose | Example output |
-|-------|---------|----------------|
-| Risk engine | Flag turbulent periods | "High turbulence expected tomorrow" |
-| Regime gate | Market/stock weather | Reduce risk mode during crisis-like regimes |
-| Opportunity ranker | Names vs SPY over ~21 days | Watchlist, not buy/sell arrows |
-| ETF lane | Core + satellite allocation hints | Favor ETFs vs benchmark |
-| Coach (rules) | Hard limits | Max position %, diversification |
-
-"Beat the market" is framed as **risk-adjusted, benchmark-relative performance** over weeks—not binary next-day direction calls.
-
-### ML (current)
-
-- Predict **learnable** targets (vol/risk first; direction last).
-- Run **bake-offs**: one trainable baseline + five architectures per job; pick a champion on validation + COVID stress test.
-- Compare every candidate against the **baseline** and naive **persistence** (today's \|return\| → tomorrow).
-- Export reproducible artifacts under `data/models/` for orchestration and backtests.
-
----
-
-## Current approach (ML Iteration 2)
-
-### Architecture strategy
-
-**Separate models per job**, not one mega-network:
-
-```text
-Shared preprocessing (run_preprocessing.py)
-        │
-        ├── J01 vol_risk      → next-day |log return|  [complete]
-        ├── J02 vol_regime    → 21d vol regime class   [active]
-        ├── J03 rel_strength  → 21d excess vs SPY        [scaffold]
-        ├── J04 etf_opportunity → ETF excess vs SPY    [scaffold]
-        └── 00 orchestration  → merge champion scores
-```
-
-Each job folder contains:
-
-- `00a_baseline_*` — Ridge on last-day features (train **first**)
-- `01a`–`01e` — GRU, TCN, LSTM, 1D CNN, XGBoost/HistGBR
-
-See [ML_Iteration_2/README.md](ML_Iteration_2/README.md) for naming, metrics, and run order.
-
-### Active job: J02 vol / regime
-
-| Item | Value |
-|------|-------|
-| Target | 21-day high-volatility regime (`vol_regime_21`) |
-| Features | 15 (plus5 profile): returns, vol windows, volume, SPY factors |
-| Lookback | 60 trading days |
-| Train | ≤ 2017-12-31 |
-| Validation | 2018–2019 |
-| Test (stress) | 2020 Q1 COVID window |
-| `fast_dev` | 200 symbols, 30 epochs |
-| `full` | Full universe, 100 epochs |
-
-### Data flow
-
-```text
-Stock Market Dataset/          (not in repo, ~2.6 GB — see docs/DATASET.md)
-        ↓
-scripts/run_preprocessing.py
-        ↓
-data/processed/*.npz           sequences + config + scaler
-        ↓
-ML_Iteration_2 notebooks
-        ↓
-data/models/*                  checkpoints + predictions JSON
-```
-
-### What's in the repo
-
-| Included | Excluded |
-|----------|----------|
-| **Trained** notebooks (J01 complete; J02 stocks + market partial) | Raw `Stock Market Dataset/` (~2.6 GB) |
-| Training scripts + scaffold generator | Scaffold jobs (J03, J04, orchestration) |
-| dev200 sequence bundles (`.npz`) | Untrained notebooks (J02 etfs, partial J02 market/stocks) |
-| Pipeline configs, scalers | Full-universe model-frame CSVs (>100 MB) |
-| Trained checkpoints (`.keras`, `.joblib`) | `.venv/` (rebuild locally) |
-| Prediction JSON for bake-off comparison | Legacy iteration-1 checkpoints |
-
-Regenerate scaffold notebooks on any machine:
+**Generated artifacts are not committed.** Prediction JSONs, processed sequences (`.npz`), and checkpoints (`.keras` / `.joblib`) are git-ignored build outputs (~650 MB locally). Regenerate them with:
 
 ```bash
-python scripts/scaffold_ml_iteration2_notebooks.py --job-slug rel_strength
-python scripts/scaffold_ml_iteration2_notebooks.py --job-slug vol_regime  # etfs + untrained candidates
+python scripts/run_preprocessing.py          # builds data/processed/*.npz
+# then run the training notebooks under ML_Iteration_2/J*/ in order
+# (00a baseline first, then the candidate architectures)
 ```
 
-### Iteration history
+See [docs/DATASET.md](docs/DATASET.md) for dataset details and [docs/PROJECT_REPORT_AND_REBUILD_GUIDE.md](docs/PROJECT_REPORT_AND_REBUILD_GUIDE.md) for the full rebuild guide.
 
-| Folder | Focus | Status |
-|--------|-------|--------|
-| `Analytics notebooks/` | EDA, preprocessing design | Reference |
-| `04_ML_Model_Iteration-1/` | AAPL direction (BiGRU, TCN) | Superseded for product |
-| `ML_Iteration_2/` | Universe vol/risk + product jobs | **Active** |
+## Dashboard
 
----
-
-## Environment
-
-### First-time setup
+A Streamlit dashboard (`dashboard/app.py`) turns the saved artifacts into a leaderboard, prediction explorer, and COVID stress-test view:
 
 ```bash
-bash scripts/setup-wsl-venv.sh    # TensorFlow GPU + deps
-source .venv/bin/activate         # or: source scripts/activate-venv.sh
-bash scripts/install-jupyter-kernel.sh
+streamlit run dashboard/app.py
 ```
 
-### Daily activation
+It reads only saved outputs (`data/models/*_tf_predictions.json`, `ML_Iteration_2/J*/champions.json`) and never retrains. If the prediction artifacts have not been generated yet, it says so and stops — the champion metrics above come from the committed `champions.json` files regardless.
 
-```bash
-source .venv/bin/activate
-```
+## Limitations
 
-**WSL pip gotcha:** Do not set `PIP_USER=true` while `.venv` is active (breaks installs inside the virtualenv).
+- Research project — **not investment advice** and not connected to any live trading.
+- Champions were selected on the dev200 universe; full-universe promotion is deliberately stricter and, for J01, currently withheld (see above).
+- J03 and J04 are scaffolds; J01, J02, and J02v2 are the completed bake-offs.
+- The dashboard's market-universe date axis is approximate (exchange holidays are not modelled).
+- The test suite (`tests/`) requires the TensorFlow environment described above.
 
-### Hardware notes (RTX 5090)
+## Tech stack
 
-- TensorFlow 2.21 may **JIT-compile** CUDA kernels for compute capability 12.0a on first GPU use (long first epoch, then normal).
-- Notebooks enable **mixed float16** when a GPU is visible.
-- If GPU libraries are missing from `LD_LIBRARY_PATH`, training falls back to CPU—check setup cell output for `GPU devices`.
-
----
-
-## Jupyter kernel
-
-| Field | Value |
-|-------|-------|
-| Kernelspec name | `stock-prediction` |
-| Display name | **`Python (stock-prediction)`** |
-| Python binary | `.venv/bin/python` |
-
-Every notebook is pinned to that kernel. **Do not** pick generic `.venv`, `python3`, or legacy kernel entries.
-
-### Register / repair
-
-```bash
-bash scripts/cleanup-jupyter-kernels.sh
-bash scripts/install-jupyter-kernel.sh
-python scripts/fix_notebook_kernels.py
-python scripts/fix_notebook_kernels.py --check   # verify only
-```
-
-### Compare models after training
-
-```bash
-python scripts/compare_job_models.py --job-slug vol_risk --universe stocks --dataset-tag dev200
-```
-
----
-
-## Repository layout
-
-```text
-Stock-Volitility-Prediction/
-├── README.md                    ← this file
-├── docs/DATASET.md              ← raw data setup + dev200 artifact guide
-├── ML_Iteration_2/              ← active notebooks + job README
-├── Analytics notebooks/         ← EDA, preprocessing
-├── 04_ML_Model_Iteration-1/     ← v1 direction models
-├── scripts/                     ← preprocessing, training utils, kernel fix
-├── data/
-│   ├── processed/               ← dev200 sequences, configs, scalers
-│   └── models/                  ← checkpoints + predictions JSON
-├── Stock Market Dataset/        ← external OHLCV (not in git)
-├── .venv/                       ← Python 3.12 + TensorFlow GPU (local)
-└── requirements.txt
-```
-
-### Key scripts
-
-| Script | Role |
-|--------|------|
-| `run_preprocessing.py` | Build universe sequences (`--profile plus5`, `--asset-type stock\|etf`) |
-| `tf_notebook_utils.py` | GRU/TCN/LSTM/CNN builders, baseline, GPU bootstrap |
-| `tf_data.py` | Load `*_sequences_*.npz` bundles |
-| `scaffold_ml_iteration2_notebooks.py` | Regenerate notebook tree |
-| `fix_notebook_kernels.py` | Unify kernelspec metadata |
-| `compare_job_models.py` | Baseline comparison table |
-| `replay_notebook_outputs.py` | Restore plots from saved predictions JSON |
-
----
-
-## Training workflow (J01 stocks example)
-
-1. Open `ML_Iteration_2/J01_vol_risk/stocks/00a_baseline_vol_risk_stocks.ipynb`
-2. Kernel: **`Python (stock-prediction)`**
-3. Run all cells → saves `data/models/baseline_vol_risk_stocks_dev200_tf_predictions.json`
-4. Run `01a` through `01e`; each reports beats/loses vs baseline
-5. `python scripts/compare_job_models.py --job-slug vol_risk --universe stocks`
-6. Record champion in `ML_Iteration_2/J01_vol_risk/champions.json`
-7. Re-run champion with `RUN_MODE = "full"` when raw dataset is available
-
----
-
-## Further reading
-
-- [ML_Iteration_2/README.md](ML_Iteration_2/README.md) — job portfolio, bake-off rules
-- [docs/DATASET.md](docs/DATASET.md) — raw dataset setup, dev200 artifacts
-- [04_ML_Model_Iteration-1/MODEL_EVALUATION_v1_vs_v2.md](04_ML_Model_Iteration-1/MODEL_EVALUATION_v1_vs_v2.md) — why v1 direction models were deprioritized
-- [Dataset Cleaning and Alignment Report.md](Dataset%20Cleaning%20and%20Alignment%20Report.md)
-- [remote-jupyter-rtx5090.md](remote-jupyter-rtx5090.md) — SSH Jupyter on a remote GPU workbench
-
----
+Python · TensorFlow/Keras · XGBoost · pandas / NumPy · Streamlit · Jupyter
 
 ## License
 
